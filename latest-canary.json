@@ -1,0 +1,19 @@
+{
+  "version": "0.1.2",
+  "notes": "This is a canary release for the ZDE application. It has the latest features but also may not be as consistent as the stable release.",
+  "pub_date": "2025-10-14T06:09:43.441Z",
+  "platforms": {
+    "darwin-aarch64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTMGYzVWo4dVpJMTN6R0F5aDF3cHJ0eTlEUnZvUVpjd1VvL2t1U0NCYVFQR0VLby9LakJpbVk2N0UrMXYzcmNZVVpWYWVmRWJKYWk2cysxUWZLRG0zbENUbjZpbEk2RHdBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzYwNDIxNTI4CWZpbGU6WkRFLUNhbmFyeS5hcHAudGFyLmd6CkpJR3ZzZm5ZV2xOcUZPT2xrRkRhMmxPeFc0MUdBTmdDUkRLZzlFL2NOaXBEejVXT0FUU3lET0VLbGFuVzl1aUhWUXB4dG43cVYvR1IyV3FtYThjMUNnPT0K",
+      "url": "https://github.com/Epoch-ML/zde-releases/releases/download/zde-canary-v0.1.2/ZDE-Canary_aarch64.app.tar.gz"
+    },
+    "linux-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTMGYzVWo4dVpJMStvcXZxdWlwcVZscDQ5KzJKUFBXd0d0QWIzSGt4akRabGlQWittejc1NTNsTUpGcFlMam1QUXVjQ0MrcjhCcFdGYmJQazhCemNLNFBxZ3JqQkJJUHdrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzYwNDIyMDYyCWZpbGU6WkRFLUNhbmFyeV8wLjEuMl9hbWQ2NC5BcHBJbWFnZQo5SWdESmZEMFN2QmMvSG13bitTUFBmcUtjZnVBU1B5WlVISHJZd2owVE1RMjRiK0h3ems1MzNmK1NMZHZJQmZQZHFib0JJTi9iOG95d2FYVW5xVVFEZz09Cg==",
+      "url": "https://github.com/Epoch-ML/zde-releases/releases/download/zde-canary-v0.1.2/ZDE-Canary_0.1.2_amd64.AppImage"
+    },
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTMGYzVWo4dVpJMTV0QXVQN0FEeGZMeHZJZWQyVGExNzBmQ2x2RXBpYmFBRmFWK3NkcnNKUmwxUkZPWkkwUmVFZjRVMitncDUyNlRpYkVvM1pkMHorUThFY09WWFduVWdBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzYwNDIyMTc4CWZpbGU6WkRFLUNhbmFyeV8wLjEuMl94NjRfZW4tVVMubXNpCmludXdlcVo4SHVjSXVNdU9tYzlxa0E5enBFbVA0ZjJSclByMTBkMVg1eDIvMDBraG83aXlkd1RBZUhVSUlMYmgyL2ltZFdta1VlY0dObnFDelJBMEJRPT0K",
+      "url": "https://github.com/Epoch-ML/zde-releases/releases/download/zde-canary-v0.1.2/ZDE-Canary_0.1.2_x64_en-US.msi"
+    }
+  }
+}
