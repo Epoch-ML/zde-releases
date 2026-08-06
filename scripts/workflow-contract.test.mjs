@@ -55,9 +55,22 @@ describe("ZDE release workflow contract", () => {
     assert.match(validateJob, /npm test/);
   });
 
-  it("checks out the exact tagged source through the read-only deploy key", () => {
+  it("checks out exact source with authenticated host metadata", () => {
+    const checkoutStart = workflow.indexOf(
+      "Check out the exact SHA and matching source tag",
+    );
+    const cleanupStart = workflow.indexOf(
+      "Delete ephemeral source deploy key",
+    );
+    const checkoutStep = workflow.slice(checkoutStart, cleanupStart);
+
     assert.match(workflow, /ZERG_SOURCE_DEPLOY_KEY/);
-    assert.match(workflow, /api\.github\.com\/meta/);
+    assert.match(checkoutStep, /GITHUB_META_TOKEN: \$\{\{ github\.token \}\}/);
+    assert.match(checkoutStep, /api\.github\.com\/meta/);
+    assert.match(
+      checkoutStep,
+      /--header "Authorization: Bearer \$GITHUB_META_TOKEN"/,
+    );
     assert.match(workflow, /git init source/);
     assert.match(workflow, /source_sha/);
     assert.match(workflow, /source_ref/);
