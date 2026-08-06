@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "product": "ZDE",
+  "channel": "preview",
+  "version": "0.2.0-preview.3",
+  "release_tag": "zde-preview-v0.2.0-preview.3",
+  "source_repository": "Epoch-ML/zerg",
+  "source_sha": "41c5270fd3583f9cc905d41f6fecb5ce4eb61acb",
+  "source_ref": "refs/tags/zde-preview-v0.2.0-preview.3",
+  "requested_at": "2026-08-06T10:22:39.000Z"
+}
