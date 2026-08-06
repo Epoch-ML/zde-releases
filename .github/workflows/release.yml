@@ -1183,8 +1183,7 @@ jobs:
               '.size | select((type == "number") and (. > 0) and (floor == .))' \
               <<<"$asset_record")"
             jq -er \
-              '.browser_download_url \
-              | select(type == "string" and length > 0)' \
+              '.browser_download_url | select(type == "string" and length > 0)' \
               <<<"$asset_record" >/dev/null
             asset_limit="$(asset_size_limit "$asset_name")"
             if [[ "$asset_size" -gt "$asset_limit" ]]; then
