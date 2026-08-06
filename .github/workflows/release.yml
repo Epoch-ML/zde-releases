@@ -1050,8 +1050,8 @@ jobs:
           for local_asset in release/*; do
             asset_name="$(basename "$local_asset")"
             asset_record="$(jq -cer --arg name "$asset_name" \
-              '[.assets[] | select(.name == $name)] \
-              | select(length == 1) | .[0]' "$release_json")"
+              '[.assets[] | select(.name == $name)] | select(length == 1) | .[0]' \
+              "$release_json")"
             jq -e --arg name "$asset_name" \
               '.name == $name and .state == "uploaded"' \
               <<<"$asset_record" >/dev/null
@@ -1105,8 +1105,8 @@ jobs:
           for local_asset in release/*; do
             asset_name="$(basename "$local_asset")"
             asset_record="$(jq -cer --arg name "$asset_name" \
-              '[.assets[] | select(.name == $name)] \
-              | select(length == 1) | .[0]' "$release_json")"
+              '[.assets[] | select(.name == $name)] | select(length == 1) | .[0]' \
+              "$release_json")"
             asset_id="$(jq -er \
               '.id | select((type == "number") and (. > 0) and (floor == .))' \
               <<<"$asset_record")"
@@ -1177,8 +1177,8 @@ jobs:
           for authenticated_asset in "$authenticated_dir"/*; do
             asset_name="$(basename "$authenticated_asset")"
             asset_record="$(jq -cer --arg name "$asset_name" \
-              '[.assets[] | select(.name == $name)] \
-              | select(length == 1) | .[0]' "$release_json")"
+              '[.assets[] | select(.name == $name)] | select(length == 1) | .[0]' \
+              "$release_json")"
             asset_size="$(jq -er \
               '.size | select((type == "number") and (. > 0) and (floor == .))' \
               <<<"$asset_record")"
@@ -1201,8 +1201,8 @@ jobs:
           for authenticated_asset in "$authenticated_dir"/*; do
             asset_name="$(basename "$authenticated_asset")"
             asset_record="$(jq -cer --arg name "$asset_name" \
-              '[.assets[] | select(.name == $name)] \
-              | select(length == 1) | .[0]' "$release_json")"
+              '[.assets[] | select(.name == $name)] | select(length == 1) | .[0]' \
+              "$release_json")"
             asset_size="$(jq -er '.size' <<<"$asset_record")"
             public_url="$(jq -er '.browser_download_url' <<<"$asset_record")"
             public_asset="$canonical_dir/$asset_name"
