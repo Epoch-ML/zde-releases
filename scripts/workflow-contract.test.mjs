@@ -424,7 +424,10 @@ describe("ZDE release workflow contract", () => {
       /ssh-key: \$\{\{ secrets\.ZDE_FEED_DEPLOY_KEY \}\}/,
     );
     assert.match(feedJob, /actions\/download-artifact@/);
-    assert.match(feedJob, /actions\/upload-pages-artifact@/);
+    assert.match(
+      feedJob,
+      /actions\/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02/,
+    );
     assert.doesNotMatch(
       feedJob,
       /GH_TOKEN|github\.token|contents: write|gh release/,
