@@ -1,0 +1,1134 @@
+name: Publish ZDE Desktop Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      request:
+        description: Request path, for example requests/zde-preview-v0.2.0-preview.1.json
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zde-v2-release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate immutable request
+    runs-on: ubuntu-24.04
+    outputs:
+      channel: ${{ steps.request.outputs.channel }}
+      request_commit: ${{ steps.select.outputs.request_commit }}
+      request_path: ${{ steps.select.outputs.request_path }}
+      requested_at: ${{ steps.request.outputs.requested_at }}
+      release_tag: ${{ steps.request.outputs.release_tag }}
+      source_ref: ${{ steps.request.outputs.source_ref }}
+      source_repository: ${{ steps.request.outputs.source_repository }}
+      source_sha: ${{ steps.request.outputs.source_sha }}
+      version: ${{ steps.request.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22.23.2"
+
+      - name: Install and test the public request validator
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm audit --audit-level=moderate
+          npm test
+
+      - id: select
+        name: Select exactly one request
+        shell: bash
+        env:
+          DISPATCH_REQUEST: ${{ inputs.request }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "::error::Public releases must be manually dispatched from refs/heads/main."
+            exit 1
+          fi
+          request_path="$DISPATCH_REQUEST"
+          if [[ ! "$request_path" =~ ^requests/zde-(preview-)?v[0-9A-Za-z.+-]+\.json$ ]]; then
+            echo "::error::Invalid ZDE release request path."
+            exit 1
+          fi
+          if [[ ! -f "$request_path" || -L "$request_path" ]]; then
+            echo "::error::The request must be a regular, non-symlink file."
+            exit 1
+          fi
+
+          mapfile -t addition_commits < <(
+            git log --format=%H --diff-filter=A -- "$request_path"
+          )
+          if [[ "${#addition_commits[@]}" -ne 1 ]]; then
+            echo "::error::The request must have exactly one immutable addition commit."
+            exit 1
+          fi
+          request_commit="${addition_commits[0]}"
+          git merge-base --is-ancestor "$request_commit" "$GITHUB_SHA"
+          read -r -a commit_and_parents <<<"$(git rev-list --parents -n 1 "$request_commit")"
+          if [[ "${#commit_and_parents[@]}" -ne 2 ]]; then
+            echo "::error::The request addition must be a single-parent commit."
+            exit 1
+          fi
+          mapfile -d '' -t addition_changes < <(
+            git diff --name-status --no-renames -z \
+              "${request_commit}^" \
+              "$request_commit"
+          )
+          if [[
+            "${#addition_changes[@]}" -ne 2 ||
+            "${addition_changes[0]}" != "A" ||
+            "${addition_changes[1]}" != "$request_path"
+          ]]; then
+            echo "::error::The request addition commit must add only this request."
+            exit 1
+          fi
+          request_mode="$(git ls-tree "$request_commit" -- "$request_path" | cut -d ' ' -f 1)"
+          if [[ "$request_mode" != "100644" ]]; then
+            echo "::error::The immutable request must be a normal non-executable file."
+            exit 1
+          fi
+          addition_bytes="$RUNNER_TEMP/zde-request-at-addition.json"
+          git show "${request_commit}:${request_path}" >"$addition_bytes"
+          if ! cmp --silent "$request_path" "$addition_bytes"; then
+            echo "::error::Request bytes changed after their immutable addition commit."
+            exit 1
+          fi
+
+          {
+            echo "request_commit=$request_commit"
+            echo "request_path=$request_path"
+          } >>"$GITHUB_OUTPUT"
+
+      - id: request
+        name: Validate request schema and provenance
+        run: node scripts/release-request.mjs "${{ steps.select.outputs.request_path }}"
+
+      - name: Require the pre-existing public release tag at the request commit
+        env:
+          RELEASE_TAG: ${{ steps.request.outputs.release_tag }}
+          REQUEST_COMMIT: ${{ steps.select.outputs.request_commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_tag_refs="$RUNNER_TEMP/zde-public-tag-refs.txt"
+          if ! git ls-remote --exit-code --tags origin \
+            "refs/tags/$RELEASE_TAG" \
+            "refs/tags/$RELEASE_TAG^{}" >"$remote_tag_refs"; then
+            echo "::error::Create the protected public $RELEASE_TAG tag before dispatching."
+            exit 1
+          fi
+          test -s "$remote_tag_refs"
+          git fetch --force --no-tags origin \
+            "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          tag_target="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
+          request_commit="$REQUEST_COMMIT"
+          if [[ "$tag_target" != "$request_commit" ]]; then
+            echo "::error::Public tag $RELEASE_TAG resolves to $tag_target, not request commit $request_commit."
+            exit 1
+          fi
+
+  build-macos:
+    name: Verify source, then build Apple Silicon macOS
+    needs: validate
+    runs-on: macos-15
+    environment:
+      name: ${{ needs.validate.outputs.channel == 'stable' && 'zde-stable-build' || 'zde-preview-build' }}
+    env:
+      CARGO_TERM_COLOR: always
+      SOURCE_REF: ${{ needs.validate.outputs.source_ref }}
+      SOURCE_REPOSITORY: ${{ needs.validate.outputs.source_repository }}
+      SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
+      ZDE_DESKTOP_VERSION: ${{ needs.validate.outputs.version }}
+      ZDE_RELEASE_DATE: ${{ needs.validate.outputs.requested_at }}
+      ZDE_RELEASE_REPOSITORY: Epoch-ML/zde-releases
+      ZDE_RELEASE_TAG: ${{ needs.validate.outputs.release_tag }}
+      ZDE_SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
+      ZDE_UPDATE_BASE_URL: https://epoch-ml.github.io/zde-releases
+      ZDE_UPDATE_CHANNEL: ${{ needs.validate.outputs.channel }}
+      VITE_ZDE_UPDATER_ENABLED: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          path: release-repository
+          persist-credentials: false
+
+      - name: Check out the exact SHA and matching source tag
+        env:
+          SOURCE_DEPLOY_KEY: ${{ secrets.ZERG_SOURCE_DEPLOY_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$SOURCE_DEPLOY_KEY" ]]; then
+            echo "::error::The environment-scoped ZERG_SOURCE_DEPLOY_KEY is not configured."
+            exit 1
+          fi
+          secure_dir="$RUNNER_TEMP/zde-build-source-ssh"
+          install -d -m 700 "$secure_dir"
+          key_path="$secure_dir/deploy-key"
+          known_hosts="$secure_dir/known_hosts"
+          install -m 600 /dev/null "$key_path"
+          printf '%s\n' "$SOURCE_DEPLOY_KEY" >"$key_path"
+          curl --fail --silent --show-error --location \
+            --proto '=https' --tlsv1.2 https://api.github.com/meta \
+            | jq -er '.ssh_keys | if length > 0 then .[] else error("no GitHub SSH keys") end | "github.com " + .' \
+            >"$known_hosts"
+          chmod 600 "$known_hosts"
+          ssh_command="ssh -i $key_path -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$known_hosts"
+
+          git init source
+          git -C source remote add origin "git@github.com:${SOURCE_REPOSITORY}.git"
+          GIT_SSH_COMMAND="$ssh_command" git -C source fetch --no-tags --depth=1 origin "$SOURCE_SHA"
+          GIT_SSH_COMMAND="$ssh_command" git -C source fetch --depth=1 origin \
+            "${SOURCE_REF}:${SOURCE_REF}"
+          tag_sha="$(git -C source rev-parse "${SOURCE_REF}^{commit}")"
+          if [[ "$tag_sha" != "$SOURCE_SHA" ]]; then
+            echo "::error::$SOURCE_REF resolves to $tag_sha, not requested SHA $SOURCE_SHA."
+            exit 1
+          fi
+          git -C source checkout --detach "$SOURCE_SHA"
+          test "$(git -C source rev-parse HEAD)" = "$SOURCE_SHA"
+          test -f source/zde/package-lock.json
+
+      - name: Delete ephemeral source deploy key
+        if: always()
+        shell: bash
+        run: |
+          rm -f "$RUNNER_TEMP/zde-build-source-ssh/deploy-key"
+
+      - name: Compare both tag-selected updater keys with independent trust roots
+        run: |
+          set -euo pipefail
+          cmp --silent \
+            release-repository/keys/zde-preview-updater.pubkey \
+            source/zde/src-tauri/updater-preview.pubkey
+          cmp --silent \
+            release-repository/keys/zde-stable-updater.pubkey \
+            source/zde/src-tauri/updater-stable.pubkey
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22.23.2"
+          cache: npm
+          cache-dependency-path: source/zde/package-lock.json
+
+      - name: Verify the deterministic source commit timestamp
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_commit_epoch="$(git -C source show -s --format=%ct "$SOURCE_SHA")"
+          source_commit_requested_at="$(node -e \
+            'process.stdout.write(new Date(Number(process.argv[1]) * 1000).toISOString())' \
+            "$source_commit_epoch")"
+          if [[ "$source_commit_requested_at" != "$ZDE_RELEASE_DATE" ]]; then
+            echo "::error::Request timestamp does not match the exact source commit timestamp."
+            exit 1
+          fi
+
+      - name: Install pinned Rust toolchain
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.88.0 \
+            --profile minimal \
+            --component clippy,rustfmt \
+            --target aarch64-apple-darwin
+          rustup default 1.88.0
+
+      - name: Install locked dependencies and security tooling
+        run: |
+          set -euo pipefail
+          npm ci --prefix source/zde
+          npm ci --ignore-scripts --prefix release-repository
+          (
+            cd release-repository
+            npm audit --audit-level=moderate
+            npm test
+          )
+          cargo install cargo-audit --version 0.22.2 --locked
+
+      - name: Test and audit the exact source
+        working-directory: source/zde
+        run: |
+          set -euo pipefail
+          # Release gate: fail on moderate, high, or critical production advisories.
+          npm audit --omit=dev --audit-level=moderate
+          cargo audit --file src-tauri/Cargo.lock
+          npm test
+          npm run build
+          cargo test --locked --manifest-path src-tauri/Cargo.toml
+          cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+          cargo clippy --locked --all-targets --manifest-path src-tauri/Cargo.toml -- -D warnings
+
+      - name: Write and verify the v2 release configuration
+        working-directory: source/zde
+        run: |
+          set -euo pipefail
+          npm run release:config
+          if [[ "$ZDE_UPDATE_CHANNEL" == "stable" ]]; then
+            key_name="updater-stable.pubkey"
+            trust_name="zde-stable-updater.pubkey"
+          else
+            key_name="updater-preview.pubkey"
+            trust_name="zde-preview-updater.pubkey"
+          fi
+          RELEASE_COMMITTED_KEY="$key_name" \
+          RELEASE_TRUST_ROOT="$GITHUB_WORKSPACE/release-repository/keys/$trust_name" \
+            node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          import { readFile } from "node:fs/promises";
+
+          const config = JSON.parse(await readFile("src-tauri/tauri.release.conf.json", "utf8"));
+          const committedKey = await readFile("src-tauri/" + process.env.RELEASE_COMMITTED_KEY);
+          const trustedKey = await readFile(process.env.RELEASE_TRUST_ROOT);
+          assert.equal(Buffer.compare(committedKey, trustedKey), 0);
+          assert.equal(config.version, process.env.ZDE_DESKTOP_VERSION);
+          assert.deepEqual(config.plugins.updater.endpoints, [
+            "https://epoch-ml.github.io/zde-releases/" + process.env.ZDE_UPDATE_CHANNEL + "/latest.json",
+          ]);
+          assert.equal(config.plugins.updater.pubkey, committedKey.toString("utf8").trim());
+          assert.equal(config.bundle.createUpdaterArtifacts, false);
+          NODE
+
+      - name: Build the unsigned app without release signing credentials
+        working-directory: source/zde
+        run: |
+          set -euo pipefail
+          npm run tauri:build -- \
+            --ci \
+            --target aarch64-apple-darwin \
+            --bundles app \
+            --no-sign \
+            --skip-stapling \
+            --config src-tauri/tauri.release.conf.json
+
+      - name: Package a bounded unsigned source stage
+        working-directory: source/zde
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle_root="src-tauri/target/aarch64-apple-darwin/release/bundle"
+          apps=()
+          while IFS= read -r path; do
+            apps+=("$path")
+          done < <(find "$bundle_root/macos" -maxdepth 1 -type d -name '*.app' -print)
+          if [[ "${#apps[@]}" -ne 1 ]]; then
+            echo "::error::Expected exactly one unsigned source-built app."
+            exit 1
+          fi
+
+          source_stage="dist/source-stage"
+          mkdir -p "$source_stage"
+          archive="$source_stage/ZDE_${ZDE_DESKTOP_VERSION}_aarch64.source.app.tar.gz"
+          node "$GITHUB_WORKSPACE/release-repository/scripts/package-macos.mjs" \
+            "${apps[0]}" \
+            "$archive"
+          if [[ "$ZDE_UPDATE_CHANNEL" == "stable" ]]; then
+            key_name="updater-stable.pubkey"
+          else
+            key_name="updater-preview.pubkey"
+          fi
+          cp "src-tauri/$key_name" "$source_stage/updater.pubkey"
+
+          node --input-type=module <<'NODE'
+          import { writeFile } from "node:fs/promises";
+
+          const metadata = {
+            schema_version: 2,
+            product: "ZDE",
+            version: process.env.ZDE_DESKTOP_VERSION,
+            channel: process.env.ZDE_UPDATE_CHANNEL,
+            release_tag: process.env.ZDE_RELEASE_TAG,
+            source_sha: process.env.ZDE_SOURCE_SHA,
+            platform: "darwin-aarch64",
+            apple_signature: "none",
+          };
+          await writeFile(
+            "dist/source-stage/build-metadata.json",
+            JSON.stringify(metadata, null, 2) + "\n",
+          );
+          NODE
+          test -s "$archive"
+          test -s "$source_stage/build-metadata.json"
+          test -s "$source_stage/updater.pubkey"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: zde-v2-unsigned-source-stage
+          path: source/zde/dist/source-stage/*
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+  apple-sign:
+    name: Sign and notarize on a fresh public-code runner
+    needs:
+      - validate
+      - build-macos
+    runs-on: macos-15
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    environment:
+      name: ${{ needs.validate.outputs.channel == 'stable' && 'zde-apple-stable' || 'zde-apple-preview' }}
+    env:
+      CHANNEL: ${{ needs.validate.outputs.channel }}
+      RELEASE_TAG: ${{ needs.validate.outputs.release_tag }}
+      REQUEST_PATH: ${{ needs.validate.outputs.request_path }}
+      SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
+      VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22.23.2"
+          cache: npm
+
+      - name: Test trusted public signing policy before handling source output
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts
+          npm audit --audit-level=moderate
+          npm test
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: zde-v2-unsigned-source-stage
+          path: source-stage
+
+      - id: source-stage
+        name: Verify and extract the hostile source stage
+        env:
+          ZDE_STAGE_MAX_ARCHIVE_BYTES: "1073741824"
+          ZDE_STAGE_MAX_ENTRY_COUNT: "16384"
+          ZDE_STAGE_MAX_FILE_BYTES: "536870912"
+          ZDE_STAGE_MAX_UNCOMPRESSED_BYTES: "2147483648"
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/release-request.mjs "$REQUEST_PATH"
+          node scripts/extract-macos-stage.mjs \
+            "$REQUEST_PATH" \
+            source-stage \
+            "$RUNNER_TEMP/zde-apple-input"
+          app="$RUNNER_TEMP/zde-apple-input/ZDE.app"
+          plist="$app/Contents/Info.plist"
+          test -d "$app" && test ! -L "$app"
+          test -f "$plist" && test ! -L "$plist"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist")" = \
+            "com.zergai.zde"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist")" = \
+            "$VERSION"
+
+          signature_details="$RUNNER_TEMP/zde-source-signature.txt"
+          if codesign -dv --verbose=4 "$app" >"$signature_details" 2>&1; then
+            if grep -Eq '^(Authority|TeamIdentifier)=' "$signature_details"; then
+              echo "::error::The source stage unexpectedly contains an identity-signed app."
+              exit 1
+            fi
+          fi
+
+      - name: Apply preview ad-hoc or fail-closed stable Apple signing
+        env:
+          ZDE_APPLE_API_ISSUER: ${{ secrets.ZDE_APPLE_API_ISSUER }}
+          ZDE_APPLE_API_KEY_ID: ${{ secrets.ZDE_APPLE_API_KEY_ID }}
+          ZDE_APPLE_API_PRIVATE_KEY: ${{ secrets.ZDE_APPLE_API_PRIVATE_KEY }}
+          ZDE_APPLE_CERTIFICATE: ${{ secrets.ZDE_APPLE_CERTIFICATE }}
+          ZDE_APPLE_CERTIFICATE_PASSWORD: ${{ secrets.ZDE_APPLE_CERTIFICATE_PASSWORD }}
+          ZDE_APPLE_SIGNING_IDENTITY: ${{ secrets.ZDE_APPLE_SIGNING_IDENTITY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="$RUNNER_TEMP/zde-apple-input/ZDE.app"
+          identity="-"
+          api_key_path=""
+          if [[ "$CHANNEL" == "stable" ]]; then
+            required=(
+              ZDE_APPLE_CERTIFICATE
+              ZDE_APPLE_CERTIFICATE_PASSWORD
+              ZDE_APPLE_SIGNING_IDENTITY
+              ZDE_APPLE_API_ISSUER
+              ZDE_APPLE_API_KEY_ID
+              ZDE_APPLE_API_PRIVATE_KEY
+            )
+            missing=()
+            for name in "${required[@]}"; do
+              if [[ -z "${!name:-}" ]]; then missing+=("$name"); fi
+            done
+            if [[ "${#missing[@]}" -ne 0 ]]; then
+              echo "::error::zde-apple-stable is missing: ${missing[*]}"
+              exit 1
+            fi
+            if [[ ! "$ZDE_APPLE_API_KEY_ID" =~ ^[0-9A-Za-z]{10,32}$ ]]; then
+              echo "::error::ZDE_APPLE_API_KEY_ID is malformed."
+              exit 1
+            fi
+            if [[ ! "$ZDE_APPLE_API_ISSUER" =~ ^[0-9A-Fa-f-]{36}$ ]]; then
+              echo "::error::ZDE_APPLE_API_ISSUER is malformed."
+              exit 1
+            fi
+
+            certificate_path="$RUNNER_TEMP/zde-developer-id.p12"
+            api_key_path="$RUNNER_TEMP/AuthKey_${ZDE_APPLE_API_KEY_ID}.p8"
+            keychain_path="$RUNNER_TEMP/zde-release.keychain-db"
+            original_keychain_path="$RUNNER_TEMP/zde-original-default-keychain"
+            security default-keychain -d user | tr -d '"' >"$original_keychain_path"
+            keychain_password="$(openssl rand -hex 32)"
+            echo "::add-mask::$keychain_password"
+            CERTIFICATE_PATH="$certificate_path" node -e \
+              'const fs=require("node:fs"); const value=process.env.ZDE_APPLE_CERTIFICATE.replace(/\s/g, ""); const bytes=Buffer.from(value, "base64"); if (!bytes.length) throw new Error("empty Apple certificate"); fs.writeFileSync(process.env.CERTIFICATE_PATH, bytes, {mode: 0o600});'
+            install -m 600 /dev/null "$api_key_path"
+            printf '%s\n' "$ZDE_APPLE_API_PRIVATE_KEY" >"$api_key_path"
+            grep -F "BEGIN PRIVATE KEY" "$api_key_path" >/dev/null
+
+            security create-keychain -p "$keychain_password" "$keychain_path"
+            security set-keychain-settings -lut 21600 "$keychain_path"
+            security unlock-keychain -p "$keychain_password" "$keychain_path"
+            security import "$certificate_path" \
+              -k "$keychain_path" \
+              -P "$ZDE_APPLE_CERTIFICATE_PASSWORD" \
+              -T /usr/bin/codesign \
+              -T /usr/bin/security
+            security set-key-partition-list \
+              -S apple-tool:,apple:,codesign: \
+              -s -k "$keychain_password" "$keychain_path"
+            security list-keychains -d user -s "$keychain_path"
+            security default-keychain -d user -s "$keychain_path"
+            security find-identity -v -p codesigning "$keychain_path" \
+              | grep -F -- "\"$ZDE_APPLE_SIGNING_IDENTITY\"" >/dev/null
+            identity="$ZDE_APPLE_SIGNING_IDENTITY"
+          fi
+
+          scripts/sign-macos-app.sh "$app" "$identity" "$CHANNEL" "$VERSION"
+
+          if [[ "$CHANNEL" == "stable" ]]; then
+            app_zip="$RUNNER_TEMP/ZDE-notarization.zip"
+            app_result="$RUNNER_TEMP/zde-app-notarization.json"
+            ditto -c -k --keepParent "$app" "$app_zip"
+            xcrun notarytool submit "$app_zip" \
+              --key "$api_key_path" \
+              --key-id "$ZDE_APPLE_API_KEY_ID" \
+              --issuer "$ZDE_APPLE_API_ISSUER" \
+              --wait --output-format json >"$app_result"
+            jq -e '.status == "Accepted"' "$app_result" >/dev/null
+            xcrun stapler staple "$app"
+            xcrun stapler validate "$app"
+          fi
+
+          output="$RUNNER_TEMP/zde-apple-output"
+          dmg_root="$RUNNER_TEMP/zde-dmg-root"
+          mkdir -p "$output" "$dmg_root"
+          ditto "$app" "$dmg_root/ZDE.app"
+          ln -s /Applications "$dmg_root/Applications"
+          dmg="$output/ZDE_${VERSION}_aarch64.dmg"
+          hdiutil create \
+            -volname ZDE \
+            -srcfolder "$dmg_root" \
+            -format UDZO \
+            -ov "$dmg"
+          dmg_sign_args=(--force --sign "$identity")
+          if [[ "$CHANNEL" == "stable" ]]; then
+            dmg_sign_args+=(--timestamp)
+          else
+            dmg_sign_args+=(--timestamp=none)
+          fi
+          codesign "${dmg_sign_args[@]}" "$dmg"
+          hdiutil verify "$dmg" >/dev/null
+
+          if [[ "$CHANNEL" == "stable" ]]; then
+            dmg_result="$RUNNER_TEMP/zde-dmg-notarization.json"
+            xcrun notarytool submit "$dmg" \
+              --key "$api_key_path" \
+              --key-id "$ZDE_APPLE_API_KEY_ID" \
+              --issuer "$ZDE_APPLE_API_ISSUER" \
+              --wait --output-format json >"$dmg_result"
+            jq -e '.status == "Accepted"' "$dmg_result" >/dev/null
+            xcrun stapler staple "$dmg"
+            xcrun stapler validate "$dmg"
+            spctl --assess --type execute --verbose=4 "$app"
+            spctl --assess --type open \
+              --context context:primary-signature --verbose=4 "$dmg"
+          fi
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign --verify --strict --verbose=2 "$dmg"
+
+          archive="$output/ZDE_${VERSION}_aarch64.app.tar.gz"
+          node scripts/package-macos.mjs "$app" "$archive"
+          if [[ "$CHANNEL" == "stable" ]]; then
+            cp keys/zde-stable-updater.pubkey "$output/updater.pubkey"
+          else
+            cp keys/zde-preview-updater.pubkey "$output/updater.pubkey"
+          fi
+          APPLE_NOTARIZED="$([[ "$CHANNEL" == "stable" ]] && echo true || echo false)" \
+            OUTPUT_DIRECTORY="$output" \
+            node --input-type=module <<'NODE'
+          import { writeFile } from "node:fs/promises";
+
+          const metadata = {
+            schema_version: 1,
+            product: "ZDE",
+            version: process.env.VERSION,
+            channel: process.env.CHANNEL,
+            release_tag: process.env.RELEASE_TAG,
+            source_sha: process.env.SOURCE_SHA,
+            apple_notarized: process.env.APPLE_NOTARIZED === "true",
+          };
+          await writeFile(
+            process.env.OUTPUT_DIRECTORY + "/build-metadata.json",
+            JSON.stringify(metadata, null, 2) + "\n",
+          );
+          NODE
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: zde-v2-macos-platform-signed
+          path: ${{ runner.temp }}/zde-apple-output/*
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+      - name: Delete ephemeral Apple credentials
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          keychain_path="$RUNNER_TEMP/zde-release.keychain-db"
+          original_keychain_path="$RUNNER_TEMP/zde-original-default-keychain"
+          if [[ -s "$original_keychain_path" ]]; then
+            original_keychain="$(cat "$original_keychain_path")"
+            security list-keychains -d user -s "$original_keychain"
+            security default-keychain -d user -s "$original_keychain"
+          fi
+          if [[ -f "$keychain_path" ]]; then
+            security delete-keychain "$keychain_path"
+          fi
+          rm -f \
+            "$RUNNER_TEMP/zde-developer-id.p12" \
+            "$RUNNER_TEMP"/AuthKey_*.p8 \
+            "$RUNNER_TEMP/zde-original-default-keychain"
+
+  sign-updater:
+    name: Sign finished updater archive in the public trust boundary
+    needs:
+      - validate
+      - apple-sign
+    runs-on: ubuntu-24.04
+    environment:
+      name: ${{ needs.validate.outputs.channel == 'stable' && 'zde-stable-updater' || 'zde-preview-updater' }}
+    env:
+      CHANNEL: ${{ needs.validate.outputs.channel }}
+      RELEASE_TAG: ${{ needs.validate.outputs.release_tag }}
+      REQUEST_PATH: ${{ needs.validate.outputs.request_path }}
+      SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
+      VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22.23.2"
+          cache: npm
+
+      - name: Install and test only the public release tooling
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts
+          npm audit --audit-level=moderate
+          npm test
+          verifier_archive="$RUNNER_TEMP/minisign-0.12-linux.tar.gz"
+          verifier_root="$RUNNER_TEMP/zde-release-tools"
+          mkdir -p "$verifier_root"
+          curl --fail --location --silent --show-error \
+            --proto '=https' --tlsv1.2 \
+            https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-linux.tar.gz \
+            --output "$verifier_archive"
+          echo \
+            "9a599b48ba6eb7b1e80f12f36b94ceca7c00b7a5173c95c3efc88d9822957e73  $verifier_archive" \
+            | sha256sum -c -
+          tar -xzf "$verifier_archive" -C "$verifier_root"
+          install -m 755 \
+            "$verifier_root/minisign-linux/x86_64/minisign" \
+            "$verifier_root/minisign"
+          echo "$verifier_root" >>"$GITHUB_PATH"
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: zde-v2-macos-platform-signed
+          path: release-input
+
+      - name: Revalidate provenance and the independent updater trust root
+        run: |
+          set -euo pipefail
+          node scripts/release-request.mjs "$REQUEST_PATH"
+          if [[ "$CHANNEL" == "stable" ]]; then
+            public_key="keys/zde-stable-updater.pubkey"
+          else
+            public_key="keys/zde-preview-updater.pubkey"
+          fi
+          cmp --silent "$public_key" release-input/updater.pubkey
+          test "$(find release-input -maxdepth 1 -type f -name '*.app.tar.gz' | wc -l)" -eq 1
+          test "$(find release-input -maxdepth 1 -type f -name '*.dmg' | wc -l)" -eq 1
+          test -s release-input/build-metadata.json
+
+      - name: Sign only the finished updater archive
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ needs.validate.outputs.channel == 'stable' && secrets.ZDE_STABLE_TAURI_SIGNING_PRIVATE_KEY || secrets.ZDE_PREVIEW_TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ needs.validate.outputs.channel == 'stable' && secrets.ZDE_STABLE_TAURI_SIGNING_PRIVATE_KEY_PASSWORD || secrets.ZDE_PREVIEW_TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$TAURI_SIGNING_PRIVATE_KEY" || -z "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" ]]; then
+            echo "::error::The environment-scoped $CHANNEL updater signing identity is incomplete."
+            exit 1
+          fi
+          mapfile -t archives < <(find release-input -maxdepth 1 -type f -name '*.app.tar.gz' -print)
+          if [[ "${#archives[@]}" -ne 1 ]]; then
+            echo "::error::Expected exactly one updater archive."
+            exit 1
+          fi
+          npm exec --offline -- tauri signer sign "${archives[0]}"
+          test -s "${archives[0]}.sig"
+
+      - name: Verify the updater signature with the public trust root
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$(find release-input -maxdepth 1 -type f -name '*.app.tar.gz' -print)"
+          signature="${archive}.sig"
+          if [[ "$CHANNEL" == "stable" ]]; then
+            public_key="keys/zde-stable-updater.pubkey"
+          else
+            public_key="keys/zde-preview-updater.pubkey"
+          fi
+          PUBLIC_KEY="$public_key" \
+            ARCHIVE_SIGNATURE="$signature" \
+            node - <<'NODE'
+          const fs = require("node:fs");
+          const publicKey = fs.readFileSync(process.env.PUBLIC_KEY, "utf8").trim();
+          const signature = fs.readFileSync(process.env.ARCHIVE_SIGNATURE, "utf8").trim();
+          fs.writeFileSync(process.env.RUNNER_TEMP + "/zde-updater.pub", Buffer.from(publicKey, "base64"));
+          fs.writeFileSync(process.env.RUNNER_TEMP + "/zde-updater.minisig", Buffer.from(signature, "base64"));
+          NODE
+          minisign -Vm "$archive" \
+            -p "$RUNNER_TEMP/zde-updater.pub" \
+            -x "$RUNNER_TEMP/zde-updater.minisig"
+
+      - name: Collect and verify the immutable release payload
+        run: |
+          set -euo pipefail
+          node scripts/collect-release.mjs "$REQUEST_PATH" release-input release
+          (
+            cd release
+            sha256sum -c checksums.txt
+          )
+          RELEASE_DIRECTORY="$PWD/release" node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          import { readFile } from "node:fs/promises";
+
+          const directory = process.env.RELEASE_DIRECTORY;
+          const manifest = JSON.parse(await readFile(directory + "/latest.json", "utf8"));
+          const metadata = JSON.parse(
+            await readFile(directory + "/release-metadata.json", "utf8"),
+          );
+          assert.equal(manifest.version, process.env.VERSION);
+          assert.equal(metadata.version, process.env.VERSION);
+          assert.equal(metadata.channel, process.env.CHANNEL);
+          assert.equal(metadata.source_sha, process.env.SOURCE_SHA);
+          assert.equal(metadata.apple_notarized, process.env.CHANNEL === "stable");
+          const expectedPrefix =
+            "https://github.com/Epoch-ML/zde-releases/releases/download/" +
+            encodeURIComponent(process.env.RELEASE_TAG) +
+            "/";
+          assert.ok(
+            manifest.platforms["darwin-aarch64"].url.startsWith(expectedPrefix),
+            "updater URL must use the encoded immutable release tag",
+          );
+          assert.ok(
+            manifest.platforms["darwin-aarch64"].signature.length > 32,
+            "updater signature must be substantive",
+          );
+          NODE
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: zde-v2-macos
+          path: release/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish immutable assets, then v2 feed
+    needs:
+      - validate
+      - sign-updater
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    environment:
+      name: zde-feed
+    env:
+      CHANNEL: ${{ needs.validate.outputs.channel }}
+      GH_TOKEN: ${{ github.token }}
+      REQUEST_COMMIT: ${{ needs.validate.outputs.request_commit }}
+      REQUEST_PATH: ${{ needs.validate.outputs.request_path }}
+      RELEASE_TAG: ${{ needs.validate.outputs.release_tag }}
+      SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
+      VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          path: release-repository
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: zde-v2-macos
+          path: release
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22.23.2"
+          cache: npm
+          cache-dependency-path: release-repository/package-lock.json
+
+      - name: Revalidate repository policy and release payload
+        run: |
+          set -euo pipefail
+          git -C release-repository merge-base --is-ancestor \
+            "$REQUEST_COMMIT" \
+            HEAD
+          git -C release-repository show \
+            "${REQUEST_COMMIT}:${REQUEST_PATH}" \
+            >"$RUNNER_TEMP/zde-publish-request.json"
+          cmp --silent \
+            "release-repository/$REQUEST_PATH" \
+            "$RUNNER_TEMP/zde-publish-request.json"
+          cd release-repository
+          npm ci --ignore-scripts
+          npm audit --audit-level=moderate
+          npm test
+          cd ..
+          test -s release/latest.json
+          test -s release/release-metadata.json
+          test -s release/checksums.txt
+          (
+            cd release
+            sha256sum -c checksums.txt
+          )
+          RELEASE_DIRECTORY="$PWD/release" node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          import { readFile, readdir } from "node:fs/promises";
+
+          const directory = process.env.RELEASE_DIRECTORY;
+          const names = await readdir(directory);
+          assert.ok(names.length >= 6, "release payload is incomplete");
+          for (const name of names) {
+            assert.match(name, /^[0-9A-Za-z._+-]+$/, "unsafe release asset name: " + name);
+          }
+          const metadata = JSON.parse(
+            await readFile(directory + "/release-metadata.json", "utf8"),
+          );
+          assert.equal(metadata.version, process.env.VERSION);
+          assert.equal(metadata.channel, process.env.CHANNEL);
+          assert.equal(metadata.source_sha, process.env.SOURCE_SHA);
+          NODE
+
+      - name: Verify the tag and create or resume the immutable GitHub Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          notes_file="$RUNNER_TEMP/zde-release-notes.md"
+          {
+            echo "ZDE $VERSION ($CHANNEL, Apple Silicon macOS)"
+            echo
+            echo "Built from Epoch-ML/zerg commit $SOURCE_SHA after source, dependency, Apple platform-signature, updater-signature, and artifact verification."
+          } >"$notes_file"
+          expected_prerelease=false
+          if [[ "$CHANNEL" == "preview" ]]; then
+            expected_prerelease=true
+          fi
+
+          git -C release-repository fetch --force --no-tags origin \
+            "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          tag_target="$(git -C release-repository rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
+          if [[ "$tag_target" != "$REQUEST_COMMIT" ]]; then
+            echo "::error::Release tag resolves to $tag_target, not immutable request commit $REQUEST_COMMIT."
+            exit 1
+          fi
+
+          release_json="$RUNNER_TEMP/zde-release.json"
+          release_error="$RUNNER_TEMP/zde-release-error.txt"
+          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+            >"$release_json" 2>"$release_error"; then
+            echo "Resuming verification of existing release $RELEASE_TAG."
+          else
+            if ! grep -Fq "(HTTP 404)" "$release_error"; then
+              cat "$release_error" >&2
+              exit 1
+            fi
+            create_args=(
+              "$RELEASE_TAG"
+              --repo "$GITHUB_REPOSITORY"
+              --verify-tag
+              --title "ZDE $VERSION ($CHANNEL)"
+              --notes-file "$notes_file"
+              --draft
+            )
+            if [[ "$CHANNEL" == "preview" ]]; then
+              create_args+=(--prerelease)
+            fi
+            gh release create "${create_args[@]}"
+            gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" >"$release_json"
+          fi
+
+          RELEASE_JSON="$release_json" \
+            EXPECTED_PRERELEASE="$expected_prerelease" \
+            NOTES_FILE="$notes_file" \
+            node --input-type=module <<'NODE'
+          import { readFile } from "node:fs/promises";
+
+          const release = JSON.parse(await readFile(process.env.RELEASE_JSON, "utf8"));
+          const expectedBody = await readFile(process.env.NOTES_FILE, "utf8");
+          const expectedPrerelease = process.env.EXPECTED_PRERELEASE === "true";
+          const mismatches = [];
+          if (release.tag_name !== process.env.RELEASE_TAG) mismatches.push("tag_name");
+          if (release.name !== "ZDE " + process.env.VERSION + " (" + process.env.CHANNEL + ")") {
+            mismatches.push("name/channel");
+          }
+          if (release.prerelease !== expectedPrerelease) mismatches.push("prerelease");
+          if (release.body !== expectedBody) mismatches.push("body");
+          if (typeof release.draft !== "boolean") mismatches.push("draft");
+          if (mismatches.length !== 0) {
+            throw new Error(
+              "Existing release metadata does not match: " + mismatches.join(", "),
+            );
+          }
+          NODE
+
+          find release -mindepth 1 -maxdepth 1 -type f -printf '%f\n' \
+            | LC_ALL=C sort >"$RUNNER_TEMP/local-asset-names.txt"
+          jq -r '.assets[].name' "$release_json" \
+            | LC_ALL=C sort >"$RUNNER_TEMP/remote-asset-names.txt"
+          if comm -13 \
+            "$RUNNER_TEMP/local-asset-names.txt" \
+            "$RUNNER_TEMP/remote-asset-names.txt" \
+            | grep -q .; then
+            echo "::error::The existing release contains unexpected immutable assets."
+            comm -13 \
+              "$RUNNER_TEMP/local-asset-names.txt" \
+              "$RUNNER_TEMP/remote-asset-names.txt"
+            exit 1
+          fi
+
+          release_is_draft="$(jq -r '.draft | tostring' "$release_json")"
+          for local_asset in release/*; do
+            asset_name="$(basename "$local_asset")"
+            asset_id="$(jq -r --arg name "$asset_name" \
+              '.assets[] | select(.name == $name) | .id' "$release_json")"
+            if [[ -n "$asset_id" ]]; then
+              remote_asset="$RUNNER_TEMP/zde-existing-$asset_id"
+              gh api \
+                -H "Accept: application/octet-stream" \
+                "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
+                >"$remote_asset"
+              if ! cmp --silent "$local_asset" "$remote_asset"; then
+                echo "::error::Existing release asset bytes do not match: $asset_name"
+                exit 1
+              fi
+            elif [[ "$release_is_draft" == "true" ]]; then
+              gh release upload "$RELEASE_TAG" "$local_asset" \
+                --repo "$GITHUB_REPOSITORY"
+            else
+              echo "::error::Published release is missing immutable asset: $asset_name"
+              exit 1
+            fi
+          done
+
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" >"$release_json"
+          jq -r '.assets[].name' "$release_json" \
+            | LC_ALL=C sort >"$RUNNER_TEMP/remote-asset-names.txt"
+          diff --unified \
+            "$RUNNER_TEMP/local-asset-names.txt" \
+            "$RUNNER_TEMP/remote-asset-names.txt"
+
+          for local_asset in release/*; do
+            asset_name="$(basename "$local_asset")"
+            asset_id="$(jq -er --arg name "$asset_name" \
+              '.assets[] | select(.name == $name) | .id' "$release_json")"
+            remote_asset="$RUNNER_TEMP/zde-complete-$asset_id"
+            gh api \
+              -H "Accept: application/octet-stream" \
+              "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
+              >"$remote_asset"
+            cmp --silent "$local_asset" "$remote_asset"
+          done
+
+          if [[ "$(jq -r '.draft | tostring' "$release_json")" == "true" ]]; then
+            gh release edit "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --draft=false
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" >"$release_json"
+          test "$(jq -r '.draft | tostring' "$release_json")" = "false"
+          if ! jq -e '.immutable == true' "$release_json" >/dev/null; then
+            echo "::error::GitHub did not mark the published release immutable; refusing feed promotion."
+            exit 1
+          fi
+          git -C release-repository fetch --force --no-tags origin \
+            "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          test "$(git -C release-repository rev-parse "refs/tags/${RELEASE_TAG}^{commit}")" = "$REQUEST_COMMIT"
+
+      - name: Download every public asset over HTTPS and compare bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          verified_dir="$RUNNER_TEMP/zde-public-assets"
+          mkdir -p "$verified_dir"
+          encoded_tag="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$RELEASE_TAG")"
+          for local_asset in release/*; do
+            asset_name="$(basename "$local_asset")"
+            encoded_asset="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$asset_name")"
+            public_url="https://github.com/$GITHUB_REPOSITORY/releases/download/$encoded_tag/$encoded_asset"
+            curl --fail --location --silent --show-error \
+              --retry 8 --retry-all-errors \
+              --proto '=https' --tlsv1.2 \
+              "$public_url" \
+              --output "$verified_dir/$asset_name"
+            cmp --silent "$local_asset" "$verified_dir/$asset_name"
+          done
+
+          archive_url="$(node -e 'const fs=require("node:fs"); const m=JSON.parse(fs.readFileSync("release/latest.json","utf8")); process.stdout.write(m.platforms["darwin-aarch64"].url)')"
+          archive_name="$(node -e 'const url=new URL(process.argv[1]); process.stdout.write(decodeURIComponent(url.pathname.split("/").pop()))' "$archive_url")"
+          encoded_archive="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$archive_name")"
+          expected_url="https://github.com/$GITHUB_REPOSITORY/releases/download/$encoded_tag/$encoded_archive"
+          if [[ "$archive_url" != "$expected_url" ]]; then
+            echo "::error::Updater manifest does not use the immutable release URL."
+            exit 1
+          fi
+          curl --fail --location --silent --show-error \
+            --retry 8 --retry-all-errors \
+            --proto '=https' --tlsv1.2 \
+            "$archive_url" \
+            --output "$RUNNER_TEMP/zde-manifest-archive"
+          cmp --silent "release/$archive_name" "$RUNNER_TEMP/zde-manifest-archive"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: release-data
+          path: pages
+          fetch-depth: 1
+          ssh-key: ${{ secrets.ZDE_FEED_DEPLOY_KEY }}
+
+      - name: Stage only the channel-scoped v2 Pages feed
+        shell: bash
+        run: |
+          set -euo pipefail
+          legacy_hash() {
+            if [[ -f "$1" ]]; then
+              sha256sum "$1" | cut -d ' ' -f 1
+            else
+              echo MISSING
+            fi
+          }
+          stable_before="$(legacy_hash pages/latest-stable.json)"
+          canary_before="$(legacy_hash pages/latest-canary.json)"
+          node release-repository/scripts/feed-policy.mjs \
+            "$CHANNEL" \
+            "$VERSION" \
+            "$PWD/release" \
+            "$PWD/pages"
+          stable_after="$(legacy_hash pages/latest-stable.json)"
+          canary_after="$(legacy_hash pages/latest-canary.json)"
+          if [[ "$stable_before" != "$stable_after" || "$canary_before" != "$canary_after" ]]; then
+            echo "::error::Legacy root feeds changed; refusing to publish."
+            exit 1
+          fi
+
+          while IFS= read -r status_line; do
+            changed_path="${status_line:3}"
+            case "$changed_path" in
+              "$CHANNEL/latest.json"|"$CHANNEL/releases/$VERSION.json") ;;
+              *)
+                echo "::error::Unexpected release-data change: $changed_path"
+                exit 1
+                ;;
+            esac
+          done < <(git -C pages status --porcelain --untracked-files=all)
+
+      - name: Publish the verified v2 feed last
+        working-directory: pages
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- "$CHANNEL/latest.json" "$CHANNEL/releases/$VERSION.json"
+          if git diff --cached --quiet; then
+            echo "The identical v2 feed is already published."
+            exit 0
+          fi
+          git commit -m "Publish ZDE $VERSION $CHANNEL feed"
+          git push origin HEAD:release-data
+
+      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
+
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
+        with:
+          path: pages
+
+  deploy-pages:
+    name: Deploy and verify the v2 updater feed
+    needs:
+      - validate
+      - publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: zde-v2-macos
+          path: release
+
+      - name: Verify the published channel manifest over HTTPS
+        env:
+          CHANNEL: ${{ needs.validate.outputs.channel }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          public_manifest="https://epoch-ml.github.io/zde-releases/$CHANNEL/latest.json"
+          for attempt in {1..18}; do
+            if curl --fail --location --silent --show-error \
+              --proto '=https' --tlsv1.2 \
+              "${public_manifest}?run=$GITHUB_RUN_ID-$attempt" \
+              --output "$RUNNER_TEMP/zde-published-latest.json" \
+              && cmp --silent release/latest.json "$RUNNER_TEMP/zde-published-latest.json"; then
+              echo "Verified $public_manifest"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::The published channel manifest did not converge to the verified bytes."
+          exit 1
