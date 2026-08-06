@@ -400,6 +400,24 @@ describe("ZDE release workflow contract", () => {
     );
   });
 
+  it("bounds draft discovery and refreshes the resolved positive release ID", () => {
+    const publishJob = workflow.slice(
+      workflow.indexOf("\n  publish:"),
+      workflow.indexOf("\n  promote-feed:"),
+    );
+
+    assert.match(publishJob, /wait_for_created_release\(\)/);
+    assert.match(publishJob, /for attempt in \{1\.\.12\}/);
+    assert.match(publishJob, /The newly created draft release did not converge/);
+    assert.match(publishJob, /\.draft == true/);
+    assert.match(publishJob, /\.id[\s\S]*type == "number"[\s\S]*floor == \./);
+    assert.match(publishJob, /refresh_release\(\)/);
+    assert.match(
+      publishJob,
+      /gh api "repos\/\$GITHUB_REPOSITORY\/releases\/\$release_id"/,
+    );
+  });
+
   it("isolates release publication from release-data authority on a fresh runner", () => {
     const publishStart = workflow.indexOf("\n  publish:");
     const feedStart = workflow.indexOf("\n  promote-feed:");
