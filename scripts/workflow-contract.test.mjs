@@ -234,15 +234,16 @@ describe("ZDE release workflow contract", () => {
       workflow,
       /actions\/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b/,
     );
-    assert.match(
-      workflow,
-      /actions\/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa/,
-    );
+    assert.doesNotMatch(workflow, /actions\/upload-pages-artifact@/);
     assert.match(
       workflow,
       /actions\/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128/,
     );
     const deployJob = workflow.indexOf("deploy-pages:");
+    const promoteJob = workflow.slice(
+      workflow.indexOf("\n  promote-feed:"),
+      workflow.indexOf("\n  deploy-pages:"),
+    );
     const deployAction = workflow.indexOf("actions/deploy-pages@");
     const httpsVerification = workflow.indexOf(
       "Verify the published channel manifest over HTTPS",
@@ -250,6 +251,17 @@ describe("ZDE release workflow contract", () => {
     assert.ok(deployJob > 0);
     assert.ok(deployJob < deployAction);
     assert.ok(deployAction < httpsVerification);
+    assert.match(promoteJob, /Build the deterministic Pages artifact/);
+    assert.match(promoteJob, /find pages[\s\S]*-type l/);
+    assert.match(promoteJob, /archive must not contain git metadata/);
+    assert.match(promoteJob, /tar[\s\S]*--sort=name[\s\S]*--mtime=/);
+    assert.match(
+      promoteJob,
+      /actions\/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02/,
+    );
+    assert.match(promoteJob, /name: github-pages/);
+    assert.match(promoteJob, /path: \$\{\{ runner\.temp \}\}\/artifact\.tar/);
+    assert.match(promoteJob, /retention-days: 1/);
   });
 
   it("resumes after a post-release failure without ever creating a tag", () => {
