@@ -234,28 +234,36 @@ describe("ZDE release workflow contract", () => {
     assert.match(workflow, /url\.pathname\.slice\(1\)\.split\("\/"\)\.map\(decodeURIComponent\)/);
   });
 
-  it("deploys the feed through the official Pages workflow before HTTPS verification", () => {
+  it("keeps queued Pages deployments recoverable before HTTPS verification", () => {
     assert.match(
       workflow,
       /actions\/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b/,
     );
     assert.doesNotMatch(workflow, /actions\/upload-pages-artifact@/);
-    assert.match(
-      workflow,
-      /actions\/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128/,
-    );
     const deployJob = workflow.indexOf("deploy-pages:");
     const promoteJob = workflow.slice(
       workflow.indexOf("\n  promote-feed:"),
       workflow.indexOf("\n  deploy-pages:"),
     );
-    const deployAction = workflow.indexOf("actions/deploy-pages@");
+    const deployBlock = workflow.slice(deployJob);
+    const deployScript = workflow.indexOf("node scripts/deploy-pages.mjs");
     const httpsVerification = workflow.indexOf(
       "Verify the published channel manifest over HTTPS",
     );
     assert.ok(deployJob > 0);
-    assert.ok(deployJob < deployAction);
-    assert.ok(deployAction < httpsVerification);
+    assert.ok(deployJob < deployScript);
+    assert.ok(deployScript < httpsVerification);
+    assert.doesNotMatch(
+      deployBlock,
+      /actions\/deploy-pages@/,
+      "the upstream action cancels a recoverable queue after ten minutes",
+    );
+    assert.match(deployBlock, /timeout-minutes: 35/);
+    assert.match(deployBlock, /PAGES_DEPLOY_TIMEOUT_MS: "1800000"/);
+    assert.match(
+      deployBlock,
+      /PAGES_ARTIFACT_ID: \$\{\{ needs\.promote-feed\.outputs\.pages_artifact_id \}\}/,
+    );
     assert.match(promoteJob, /Build the deterministic Pages artifact/);
     assert.match(promoteJob, /find pages[\s\S]*-type l/);
     assert.match(promoteJob, /archive must not contain git metadata/);
@@ -264,6 +272,11 @@ describe("ZDE release workflow contract", () => {
       promoteJob,
       /actions\/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02/,
     );
+    assert.match(
+      promoteJob,
+      /pages_artifact_id: \$\{\{ steps\.pages-artifact\.outputs\.artifact-id \}\}/,
+    );
+    assert.match(promoteJob, /id: pages-artifact[\s\S]*name: github-pages/);
     assert.match(promoteJob, /name: github-pages/);
     assert.match(promoteJob, /path: \$\{\{ runner\.temp \}\}\/artifact\.tar/);
     assert.match(promoteJob, /retention-days: 1/);
