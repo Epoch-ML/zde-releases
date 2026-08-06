@@ -166,6 +166,7 @@ jobs:
 
       - name: Check out the exact SHA and matching source tag
         env:
+          GITHUB_META_TOKEN: ${{ github.token }}
           SOURCE_DEPLOY_KEY: ${{ secrets.ZERG_SOURCE_DEPLOY_KEY }}
         shell: bash
         run: |
@@ -181,7 +182,9 @@ jobs:
           install -m 600 /dev/null "$key_path"
           printf '%s\n' "$SOURCE_DEPLOY_KEY" >"$key_path"
           curl --fail --silent --show-error --location \
-            --proto '=https' --tlsv1.2 https://api.github.com/meta \
+            --proto '=https' --tlsv1.2 \
+            --header "Authorization: Bearer $GITHUB_META_TOKEN" \
+            https://api.github.com/meta \
             | jq -er '.ssh_keys | if length > 0 then .[] else error("no GitHub SSH keys") end | "github.com " + .' \
             >"$known_hosts"
           chmod 600 "$known_hosts"
