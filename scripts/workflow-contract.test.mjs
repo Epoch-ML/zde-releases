@@ -100,6 +100,74 @@ describe("ZDE release workflow contract", () => {
     );
   });
 
+  it("keeps exact-source gates free of release metadata and scopes later inputs", () => {
+    const buildStart = workflow.indexOf("\n  build-macos:");
+    const appleStart = workflow.indexOf("\n  apple-sign:");
+    const buildJob = workflow.slice(buildStart, appleStart);
+    const jobEnvironment = buildJob.slice(0, buildJob.indexOf("\n    steps:"));
+    const sourceGate = buildJob.slice(
+      buildJob.indexOf("Test and audit the exact source"),
+      buildJob.indexOf("Write and verify the v2 release configuration"),
+    );
+    const releaseVariables = [
+      "ZDE_DESKTOP_VERSION",
+      "ZDE_RELEASE_DATE",
+      "ZDE_RELEASE_REPOSITORY",
+      "ZDE_RELEASE_TAG",
+      "ZDE_SOURCE_SHA",
+      "ZDE_UPDATE_BASE_URL",
+      "ZDE_UPDATE_CHANNEL",
+      "VITE_ZDE_UPDATER_ENABLED",
+    ];
+
+    for (const name of releaseVariables) {
+      assert.doesNotMatch(jobEnvironment, new RegExp(`\\n      ${name}:`));
+      assert.doesNotMatch(sourceGate, new RegExp(`\\b${name}\\b`));
+    }
+
+    const timestampStep = buildJob.slice(
+      buildJob.indexOf("Verify the deterministic source commit timestamp"),
+      buildJob.indexOf("Install pinned Rust toolchain"),
+    );
+    assert.match(
+      timestampStep,
+      /ZDE_RELEASE_DATE: \$\{\{ needs\.validate\.outputs\.requested_at \}\}/,
+    );
+
+    const configStep = buildJob.slice(
+      buildJob.indexOf("Write and verify the v2 release configuration"),
+      buildJob.indexOf("Build the unsigned app without release signing credentials"),
+    );
+    for (const binding of [
+      "ZDE_DESKTOP_VERSION: ${{ needs.validate.outputs.version }}",
+      "ZDE_UPDATE_BASE_URL: https://epoch-ml.github.io/zde-releases",
+      "ZDE_UPDATE_CHANNEL: ${{ needs.validate.outputs.channel }}",
+    ]) {
+      assert.ok(configStep.includes(binding));
+    }
+
+    const applicationBuildStep = buildJob.slice(
+      buildJob.indexOf("Build the unsigned app without release signing credentials"),
+      buildJob.indexOf("Package a bounded unsigned source stage"),
+    );
+    assert.ok(
+      applicationBuildStep.includes('VITE_ZDE_UPDATER_ENABLED: "true"'),
+    );
+
+    const packageStep = buildJob.slice(
+      buildJob.indexOf("Package a bounded unsigned source stage"),
+      buildJob.indexOf("actions/upload-artifact"),
+    );
+    for (const binding of [
+      "ZDE_DESKTOP_VERSION: ${{ needs.validate.outputs.version }}",
+      "ZDE_RELEASE_TAG: ${{ needs.validate.outputs.release_tag }}",
+      "ZDE_SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}",
+      "ZDE_UPDATE_CHANNEL: ${{ needs.validate.outputs.channel }}",
+    ]) {
+      assert.ok(packageStep.includes(binding));
+    }
+  });
+
   it("separates preview ad-hoc signing from fail-closed stable credentials", () => {
     assert.match(workflow, /identity="-"/);
     for (const name of [
