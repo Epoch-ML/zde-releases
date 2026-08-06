@@ -68,6 +68,25 @@ describe("ZDE release workflow contract", () => {
     assert.match(workflow, /Delete ephemeral source deploy key/);
   });
 
+  it("fetches only requested refs and never hydrates unrelated source LFS objects", () => {
+    const checkoutStart = workflow.indexOf(
+      "Check out the exact SHA and matching source tag",
+    );
+    const cleanupStart = workflow.indexOf(
+      "Delete ephemeral source deploy key",
+    );
+    const checkoutStep = workflow.slice(checkoutStart, cleanupStart);
+
+    assert.equal(
+      checkoutStep.match(/git -C source fetch --no-tags/g)?.length,
+      2,
+    );
+    assert.match(
+      checkoutStep,
+      /GIT_LFS_SKIP_SMUDGE=1 git -C source checkout --detach "\$SOURCE_SHA"/,
+    );
+  });
+
   it("separates preview ad-hoc signing from fail-closed stable credentials", () => {
     assert.match(workflow, /identity="-"/);
     for (const name of [
