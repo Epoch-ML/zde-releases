@@ -294,6 +294,20 @@ describe("ZDE release workflow contract", () => {
     assert.ok(publicDownload < feed);
   });
 
+  it("finds draft and published releases by one exact tag match", () => {
+    const publishStart = workflow.indexOf("\n  publish:");
+    const feedStart = workflow.indexOf("\n  promote-feed:");
+    const publishJob = workflow.slice(publishStart, feedStart);
+
+    assert.match(publishJob, /gh api --paginate --slurp/);
+    assert.match(publishJob, /scripts\/resolve-release\.mjs/);
+    assert.doesNotMatch(
+      publishJob,
+      /releases\/tags\/\$RELEASE_TAG/,
+      "the tag endpoint cannot resolve a draft release",
+    );
+  });
+
   it("isolates updater signing from private source and pins GitHub-owned actions", () => {
     assert.doesNotMatch(workflow, /uses: actions\/[A-Za-z0-9_-]+@v\d/);
     assert.doesNotMatch(workflow, /dtolnay\/rust-toolchain/);

@@ -880,15 +880,20 @@ jobs:
           fi
 
           release_json="$RUNNER_TEMP/zde-release.json"
-          release_error="$RUNNER_TEMP/zde-release-error.txt"
-          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
-            >"$release_json" 2>"$release_error"; then
+          release_pages="$RUNNER_TEMP/zde-release-pages.json"
+          resolve_release() {
+            gh api --paginate --slurp \
+              "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              >"$release_pages"
+            node release-repository/scripts/resolve-release.mjs \
+              "$release_pages" \
+              "$RELEASE_TAG" \
+              >"$release_json"
+          }
+          resolve_release
+          if ! jq -e '. == null' "$release_json" >/dev/null; then
             echo "Resuming verification of existing release $RELEASE_TAG."
           else
-            if ! grep -Fq "(HTTP 404)" "$release_error"; then
-              cat "$release_error" >&2
-              exit 1
-            fi
             create_args=(
               "$RELEASE_TAG"
               --repo "$GITHUB_REPOSITORY"
@@ -901,7 +906,11 @@ jobs:
               create_args+=(--prerelease)
             fi
             gh release create "${create_args[@]}"
-            gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" >"$release_json"
+            resolve_release
+            if ! jq -e '. != null' "$release_json" >/dev/null; then
+              echo "::error::The newly created draft release was not returned by the authenticated release listing."
+              exit 1
+            fi
           fi
 
           RELEASE_JSON="$release_json" \
@@ -967,7 +976,8 @@ jobs:
             fi
           done
 
-          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" >"$release_json"
+          resolve_release
+          test "$(jq -r '.tag_name' "$release_json")" = "$RELEASE_TAG"
           jq -r '.assets[].name' "$release_json" \
             | LC_ALL=C sort >"$RUNNER_TEMP/remote-asset-names.txt"
           diff --unified \
@@ -986,12 +996,14 @@ jobs:
             cmp --silent "$local_asset" "$remote_asset"
           done
 
+          release_id="$(jq -er '.id | numbers' "$release_json")"
           if [[ "$(jq -r '.draft | tostring' "$release_json")" == "true" ]]; then
             gh release edit "$RELEASE_TAG" \
               --repo "$GITHUB_REPOSITORY" \
               --draft=false
           fi
-          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" >"$release_json"
+          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" >"$release_json"
+          test "$(jq -r '.tag_name' "$release_json")" = "$RELEASE_TAG"
           test "$(jq -r '.draft | tostring' "$release_json")" = "false"
           if ! jq -e '.immutable == true' "$release_json" >/dev/null; then
             echo "::error::GitHub did not mark the published release immutable; refusing feed promotion."
