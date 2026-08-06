@@ -169,6 +169,33 @@ test("local timeout leaves the keyed Pages deployment active for an idempotent r
   );
 });
 
+test("default polling waits between queued status requests", async () => {
+  const fake = fakeDeployment(["deployment_queued", "succeed"]);
+  const statusRequestTimes = [];
+  const fetchImpl = async (url, options) => {
+    if (String(url).includes(`/pages/deployments/${DEPLOYMENT_ID}`)) {
+      statusRequestTimes.push(performance.now());
+    }
+    return fake.dependencies.fetchImpl(url, options);
+  };
+
+  const result = await deployPages(
+    deploymentOptions({ timeoutMs: "1000" }),
+    {
+      fetchImpl,
+      logger: fake.dependencies.logger,
+      pollIntervalMs: 20,
+    },
+  );
+
+  assert.equal(result.deploymentId, DEPLOYMENT_ID);
+  assert.equal(statusRequestTimes.length, 2);
+  assert.ok(
+    statusRequestTimes[1] - statusRequestTimes[0] >= 15,
+    "the default sleeper must pace status API requests",
+  );
+});
+
 test("terminal Pages states and repeated status failures fail closed", async () => {
   for (const [status, message] of [
     ["deployment_failed", "deployment failed"],
