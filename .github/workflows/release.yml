@@ -150,14 +150,6 @@ jobs:
       SOURCE_REF: ${{ needs.validate.outputs.source_ref }}
       SOURCE_REPOSITORY: ${{ needs.validate.outputs.source_repository }}
       SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
-      ZDE_DESKTOP_VERSION: ${{ needs.validate.outputs.version }}
-      ZDE_RELEASE_DATE: ${{ needs.validate.outputs.requested_at }}
-      ZDE_RELEASE_REPOSITORY: Epoch-ML/zde-releases
-      ZDE_RELEASE_TAG: ${{ needs.validate.outputs.release_tag }}
-      ZDE_SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
-      ZDE_UPDATE_BASE_URL: https://epoch-ml.github.io/zde-releases
-      ZDE_UPDATE_CHANNEL: ${{ needs.validate.outputs.channel }}
-      VITE_ZDE_UPDATER_ENABLED: "true"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -227,6 +219,8 @@ jobs:
           cache-dependency-path: source/zde/package-lock.json
 
       - name: Verify the deterministic source commit timestamp
+        env:
+          ZDE_RELEASE_DATE: ${{ needs.validate.outputs.requested_at }}
         shell: bash
         run: |
           set -euo pipefail
@@ -274,6 +268,10 @@ jobs:
           cargo clippy --locked --all-targets --manifest-path src-tauri/Cargo.toml -- -D warnings
 
       - name: Write and verify the v2 release configuration
+        env:
+          ZDE_DESKTOP_VERSION: ${{ needs.validate.outputs.version }}
+          ZDE_UPDATE_BASE_URL: https://epoch-ml.github.io/zde-releases
+          ZDE_UPDATE_CHANNEL: ${{ needs.validate.outputs.channel }}
         working-directory: source/zde
         run: |
           set -euo pipefail
@@ -304,6 +302,8 @@ jobs:
           NODE
 
       - name: Build the unsigned app without release signing credentials
+        env:
+          VITE_ZDE_UPDATER_ENABLED: "true"
         working-directory: source/zde
         run: |
           set -euo pipefail
@@ -316,6 +316,11 @@ jobs:
             --config src-tauri/tauri.release.conf.json
 
       - name: Package a bounded unsigned source stage
+        env:
+          ZDE_DESKTOP_VERSION: ${{ needs.validate.outputs.version }}
+          ZDE_RELEASE_TAG: ${{ needs.validate.outputs.release_tag }}
+          ZDE_SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
+          ZDE_UPDATE_CHANNEL: ${{ needs.validate.outputs.channel }}
         working-directory: source/zde
         shell: bash
         run: |
