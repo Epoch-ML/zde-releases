@@ -33,8 +33,11 @@ artifacts, the independent updater public key, and GitHub Pages feeds.
    signer command. Private source and the updater key never coexist.
 6. The publisher creates a draft GitHub Release, uploads only missing assets,
    verifies exact names and bytes, and publishes it. A retry resumes only when
-   release metadata, tag target, asset set, and every existing byte match.
-7. Public release bytes are compared before the channel feed is committed to
+   release metadata, tag target, asset set, and every existing byte match. This
+   job has release-write authority but no feed deploy credential.
+7. After public release bytes compare exactly, a fresh read-only job enters the
+   **zde-feed** environment. It revalidates the immutable request, tag, and
+   signed feed inputs before committing only the channel feed to
    **release-data**. The official Pages deployment action publishes that exact
    tree, then the workflow compares the live HTTPS manifest. The feed is
    published last and cannot move to an older semantic version.
@@ -81,7 +84,9 @@ Updater environments:
 
 No build environment contains Apple or updater private keys. No Apple or
 updater environment contains a source key, and neither signer can write the
-feed.
+feed. The GitHub Release publisher and feed promoter also run on separate
+hosts: the publisher never enters **zde-feed**, and the feed promoter has only
+`contents: read` plus the branch-scoped deploy key.
 
 Preview and stable applications embed distinct updater roots:
 

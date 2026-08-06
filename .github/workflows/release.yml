@@ -772,18 +772,15 @@ jobs:
           retention-days: 7
 
   publish:
-    name: Publish immutable assets, then v2 feed
+    name: Publish immutable release assets
     needs:
       - validate
       - sign-updater
     runs-on: ubuntu-24.04
     permissions:
       contents: write
-    environment:
-      name: zde-feed
     env:
       CHANNEL: ${{ needs.validate.outputs.channel }}
-      GH_TOKEN: ${{ github.token }}
       REQUEST_COMMIT: ${{ needs.validate.outputs.request_commit }}
       REQUEST_PATH: ${{ needs.validate.outputs.request_path }}
       RELEASE_TAG: ${{ needs.validate.outputs.release_tag }}
@@ -794,6 +791,7 @@ jobs:
         with:
           path: release-repository
           fetch-depth: 0
+          persist-credentials: false
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -849,6 +847,8 @@ jobs:
           NODE
 
       - name: Verify the tag and create or resume the immutable GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1027,6 +1027,104 @@ jobs:
             --output "$RUNNER_TEMP/zde-manifest-archive"
           cmp --silent "release/$archive_name" "$RUNNER_TEMP/zde-manifest-archive"
 
+  promote-feed:
+    name: Promote the verified v2 feed on a fresh runner
+    needs:
+      - validate
+      - publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    environment:
+      name: zde-feed
+    env:
+      CHANNEL: ${{ needs.validate.outputs.channel }}
+      REQUEST_COMMIT: ${{ needs.validate.outputs.request_commit }}
+      REQUEST_PATH: ${{ needs.validate.outputs.request_path }}
+      RELEASE_TAG: ${{ needs.validate.outputs.release_tag }}
+      SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
+      VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          path: release-repository
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22.23.2"
+          cache: npm
+          cache-dependency-path: release-repository/package-lock.json
+
+      - name: Install and test the read-only feed policy
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund \
+            --prefix release-repository
+          node --test release-repository/scripts/feed-policy.test.mjs
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: zde-v2-macos
+          path: release
+
+      - name: Revalidate the immutable request, tag, and signed feed inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C release-repository merge-base --is-ancestor \
+            "$REQUEST_COMMIT" \
+            HEAD
+          git -C release-repository show \
+            "${REQUEST_COMMIT}:${REQUEST_PATH}" \
+            >"$RUNNER_TEMP/zde-feed-request.json"
+          cmp --silent \
+            "release-repository/$REQUEST_PATH" \
+            "$RUNNER_TEMP/zde-feed-request.json"
+          node release-repository/scripts/release-request.mjs \
+            "release-repository/$REQUEST_PATH" \
+            >/dev/null
+          test -s release/latest.json
+          test -s release/release-metadata.json
+          test -s release/checksums.txt
+          (
+            cd release
+            sha256sum -c checksums.txt
+          )
+          RELEASE_DIRECTORY="$PWD/release" node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          import { readFile } from "node:fs/promises";
+
+          const directory = process.env.RELEASE_DIRECTORY;
+          const manifest = JSON.parse(
+            await readFile(directory + "/latest.json", "utf8"),
+          );
+          const metadata = JSON.parse(
+            await readFile(directory + "/release-metadata.json", "utf8"),
+          );
+          assert.equal(manifest.version, process.env.VERSION);
+          assert.equal(metadata.version, process.env.VERSION);
+          assert.equal(metadata.channel, process.env.CHANNEL);
+          assert.equal(metadata.source_sha, process.env.SOURCE_SHA);
+          const expectedPrefix =
+            "https://github.com/Epoch-ML/zde-releases/releases/download/" +
+            encodeURIComponent(process.env.RELEASE_TAG) +
+            "/";
+          assert.ok(
+            manifest.platforms["darwin-aarch64"].url.startsWith(expectedPrefix),
+            "feed input must use the immutable release tag",
+          );
+          NODE
+          git -C release-repository fetch --force --no-tags origin \
+            "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          tag_target="$(git -C release-repository rev-parse \
+            "refs/tags/${RELEASE_TAG}^{commit}")"
+          if [[ "$tag_target" != "$REQUEST_COMMIT" ]]; then
+            echo "::error::Release tag moved before feed promotion."
+            exit 1
+          fi
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: release-data
@@ -1094,7 +1192,7 @@ jobs:
     name: Deploy and verify the v2 updater feed
     needs:
       - validate
-      - publish
+      - promote-feed
     runs-on: ubuntu-24.04
     permissions:
       contents: read
