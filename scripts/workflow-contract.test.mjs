@@ -269,14 +269,41 @@ describe("ZDE release workflow contract", () => {
     );
   });
 
-  it("keeps release-data authority in the feed publisher only", () => {
+  it("isolates release publication from release-data authority on a fresh runner", () => {
     const publishStart = workflow.indexOf("\n  publish:");
+    const feedStart = workflow.indexOf("\n  promote-feed:");
     const pagesStart = workflow.indexOf("\n  deploy-pages:");
-    const beforePublish = workflow.slice(0, publishStart);
-    const publishJob = workflow.slice(publishStart, pagesStart);
-    assert.doesNotMatch(beforePublish, /ZDE_FEED_DEPLOY_KEY|name: zde-feed/);
-    assert.match(publishJob, /name: zde-feed/);
-    assert.match(publishJob, /ssh-key: \$\{\{ secrets\.ZDE_FEED_DEPLOY_KEY \}\}/);
+    assert.ok(
+      publishStart > 0 && feedStart > publishStart && pagesStart > feedStart,
+      "feed promotion must be a separate job between release publication and Pages deployment",
+    );
+
+    const publishJob = workflow.slice(publishStart, feedStart);
+    const feedJob = workflow.slice(feedStart, pagesStart);
+    assert.match(publishJob, /permissions:\n      contents: write/);
+    assert.doesNotMatch(
+      publishJob,
+      /ZDE_FEED_DEPLOY_KEY|name: zde-feed|ref: release-data|git push/,
+    );
+    assert.match(feedJob, /needs:[\s\S]*- publish/);
+    assert.match(feedJob, /permissions:\n      contents: read/);
+    assert.match(feedJob, /name: zde-feed/);
+    assert.match(
+      feedJob,
+      /ssh-key: \$\{\{ secrets\.ZDE_FEED_DEPLOY_KEY \}\}/,
+    );
+    assert.match(feedJob, /actions\/download-artifact@/);
+    assert.match(feedJob, /actions\/upload-pages-artifact@/);
+    assert.doesNotMatch(
+      feedJob,
+      /GH_TOKEN|github\.token|contents: write|gh release/,
+    );
+
+    const pagesHeader = workflow.slice(
+      pagesStart,
+      workflow.indexOf("\n    steps:", pagesStart),
+    );
+    assert.match(pagesHeader, /needs:[\s\S]*- promote-feed/);
   });
 
   it("pins runner toolchains and avoids floating package-manager installs", () => {
