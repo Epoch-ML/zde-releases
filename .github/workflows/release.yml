@@ -190,14 +190,14 @@ jobs:
           git init source
           git -C source remote add origin "git@github.com:${SOURCE_REPOSITORY}.git"
           GIT_SSH_COMMAND="$ssh_command" git -C source fetch --no-tags --depth=1 origin "$SOURCE_SHA"
-          GIT_SSH_COMMAND="$ssh_command" git -C source fetch --depth=1 origin \
+          GIT_SSH_COMMAND="$ssh_command" git -C source fetch --no-tags --depth=1 origin \
             "${SOURCE_REF}:${SOURCE_REF}"
           tag_sha="$(git -C source rev-parse "${SOURCE_REF}^{commit}")"
           if [[ "$tag_sha" != "$SOURCE_SHA" ]]; then
             echo "::error::$SOURCE_REF resolves to $tag_sha, not requested SHA $SOURCE_SHA."
             exit 1
           fi
-          git -C source checkout --detach "$SOURCE_SHA"
+          GIT_LFS_SKIP_SMUDGE=1 git -C source checkout --detach "$SOURCE_SHA"
           test "$(git -C source rev-parse HEAD)" = "$SOURCE_SHA"
           test -f source/zde/package-lock.json
 
