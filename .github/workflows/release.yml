@@ -890,6 +890,23 @@ jobs:
               "$RELEASE_TAG" \
               >"$release_json"
           }
+          wait_for_created_release() {
+            for attempt in {1..12}; do
+              resolve_release
+              if jq -e '. != null' "$release_json" >/dev/null; then
+                if ! jq -e '.draft == true' "$release_json" >/dev/null; then
+                  echo "::error::The newly created release unexpectedly became published before asset verification."
+                  return 1
+                fi
+                return 0
+              fi
+              if [[ "$attempt" -lt 12 ]]; then
+                sleep 5
+              fi
+            done
+            echo "::error::The newly created draft release did not converge in the authenticated release listing."
+            return 1
+          }
           resolve_release
           if ! jq -e '. == null' "$release_json" >/dev/null; then
             echo "Resuming verification of existing release $RELEASE_TAG."
@@ -906,12 +923,21 @@ jobs:
               create_args+=(--prerelease)
             fi
             gh release create "${create_args[@]}"
-            resolve_release
-            if ! jq -e '. != null' "$release_json" >/dev/null; then
-              echo "::error::The newly created draft release was not returned by the authenticated release listing."
-              exit 1
-            fi
+            wait_for_created_release
           fi
+
+          release_id="$(jq -er \
+            '.id | select((type == "number") and (. > 0) and (floor == .))' \
+            "$release_json")"
+          refresh_release() {
+            gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+              >"$release_json"
+            jq -e \
+              --arg tag "$RELEASE_TAG" \
+              --argjson expected_id "$release_id" \
+              '.id == $expected_id and .tag_name == $tag' \
+              "$release_json" >/dev/null
+          }
 
           RELEASE_JSON="$release_json" \
             EXPECTED_PRERELEASE="$expected_prerelease" \
@@ -976,8 +1002,7 @@ jobs:
             fi
           done
 
-          resolve_release
-          test "$(jq -r '.tag_name' "$release_json")" = "$RELEASE_TAG"
+          refresh_release
           jq -r '.assets[].name' "$release_json" \
             | LC_ALL=C sort >"$RUNNER_TEMP/remote-asset-names.txt"
           diff --unified \
@@ -996,14 +1021,12 @@ jobs:
             cmp --silent "$local_asset" "$remote_asset"
           done
 
-          release_id="$(jq -er '.id | numbers' "$release_json")"
           if [[ "$(jq -r '.draft | tostring' "$release_json")" == "true" ]]; then
             gh release edit "$RELEASE_TAG" \
               --repo "$GITHUB_REPOSITORY" \
               --draft=false
           fi
-          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" >"$release_json"
-          test "$(jq -r '.tag_name' "$release_json")" = "$RELEASE_TAG"
+          refresh_release
           test "$(jq -r '.draft | tostring' "$release_json")" = "false"
           if ! jq -e '.immutable == true' "$release_json" >/dev/null; then
             echo "::error::GitHub did not mark the published release immutable; refusing feed promotion."
