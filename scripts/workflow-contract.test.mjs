@@ -359,13 +359,18 @@ describe("ZDE release workflow contract", () => {
     const appleSecrets = workflow.indexOf(
       "ZDE_APPLE_CERTIFICATE: ${{ secrets.ZDE_APPLE_CERTIFICATE }}",
     );
+    const hostileStage = workflow.slice(extract, appleSecrets);
     assert.ok(extract > 0 && appleSecrets > extract);
     assert.match(workflow, /aarch64\.source\.app\.tar\.gz/);
     assert.match(workflow, /ZDE_STAGE_MAX_ENTRY_COUNT/);
     assert.match(workflow, /ZDE_STAGE_MAX_UNCOMPRESSED_BYTES/);
+    assert.doesNotMatch(hostileStage, /Contents\/MacOS\/ZDE(?:\s|"|'|$)/);
+    assert.match(hostileStage, /codesign_status=0/);
+    assert.match(hostileStage, /scripts\/verify-source-signature\.mjs/);
     assert.doesNotMatch(
-      workflow.slice(extract, appleSecrets),
-      /Contents\/MacOS\/ZDE(?:\s|"|'|$)/,
+      hostileStage,
+      /grep -Eq '\^\(Authority\|TeamIdentifier\)='/,
+      "TeamIdentifier=not set is an ad-hoc sentinel, not a signing identity",
     );
   });
 

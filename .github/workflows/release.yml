@@ -442,12 +442,12 @@ jobs:
             "$VERSION"
 
           signature_details="$RUNNER_TEMP/zde-source-signature.txt"
-          if codesign -dv --verbose=4 "$app" >"$signature_details" 2>&1; then
-            if grep -Eq '^(Authority|TeamIdentifier)=' "$signature_details"; then
-              echo "::error::The source stage unexpectedly contains an identity-signed app."
-              exit 1
-            fi
-          fi
+          codesign_status=0
+          codesign -dv --verbose=4 "$app" >"$signature_details" 2>&1 || \
+            codesign_status=$?
+          node scripts/verify-source-signature.mjs \
+            "$signature_details" \
+            "$codesign_status"
 
       - name: Apply preview ad-hoc or fail-closed stable Apple signing
         env:

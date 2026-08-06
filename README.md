@@ -130,6 +130,7 @@ material through release artifacts.
     npm audit --audit-level=moderate
     npm test
     npm run test:mutation:request
+    npm run test:mutation:signing
     actionlint .github/workflows/release.yml
 
 Generated mutation and dependency directories are ignored.
