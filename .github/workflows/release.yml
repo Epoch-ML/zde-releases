@@ -824,6 +824,22 @@ jobs:
           cmp --silent \
             "release-repository/$REQUEST_PATH" \
             "$RUNNER_TEMP/zde-publish-request.json"
+          if [[ "$CHANNEL" == "stable" ]]; then
+            updater_key_path="keys/zde-stable-updater.pubkey"
+          else
+            updater_key_path="keys/zde-preview-updater.pubkey"
+          fi
+          updater_key_type="$(git -C release-repository ls-tree \
+            "$REQUEST_COMMIT" -- "$updater_key_path" \
+            | awk '{ print $1 " " $2 }')"
+          if [[ "$updater_key_type" != "100644 blob" ]]; then
+            echo "::error::The request-bound updater key must be one normal file."
+            exit 1
+          fi
+          git -C release-repository show \
+            "${REQUEST_COMMIT}:${updater_key_path}" \
+            >"$RUNNER_TEMP/zde-request-updater.pubkey"
+          test -s "$RUNNER_TEMP/zde-request-updater.pubkey"
           cd release-repository
           npm ci --ignore-scripts
           npm audit --audit-level=moderate
@@ -836,23 +852,32 @@ jobs:
             cd release
             sha256sum -c checksums.txt
           )
-          RELEASE_DIRECTORY="$PWD/release" node --input-type=module <<'NODE'
-          import assert from "node:assert/strict";
-          import { readFile, readdir } from "node:fs/promises";
+          node release-repository/scripts/verify-release-payload.mjs \
+            "release-repository/$REQUEST_PATH" \
+            "$PWD/release" \
+            "$GITHUB_REPOSITORY"
 
-          const directory = process.env.RELEASE_DIRECTORY;
-          const names = await readdir(directory);
-          assert.ok(names.length >= 6, "release payload is incomplete");
-          for (const name of names) {
-            assert.match(name, /^[0-9A-Za-z._+-]+$/, "unsafe release asset name: " + name);
-          }
-          const metadata = JSON.parse(
-            await readFile(directory + "/release-metadata.json", "utf8"),
-          );
-          assert.equal(metadata.version, process.env.VERSION);
-          assert.equal(metadata.channel, process.env.CHANNEL);
-          assert.equal(metadata.source_sha, process.env.SOURCE_SHA);
-          NODE
+      - name: Install the pinned public updater verifier
+        shell: bash
+        run: |
+          set -euo pipefail
+          verifier_archive="$RUNNER_TEMP/minisign-0.12-linux.tar.gz"
+          verifier_root="$RUNNER_TEMP/zde-public-release-tools"
+          mkdir -p "$verifier_root"
+          curl --fail --location --silent --show-error \
+            --connect-timeout 30 --max-time 300 \
+            --max-filesize 10485760 \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-linux.tar.gz \
+            --output "$verifier_archive"
+          echo \
+            "9a599b48ba6eb7b1e80f12f36b94ceca7c00b7a5173c95c3efc88d9822957e73  $verifier_archive" \
+            | sha256sum -c -
+          tar -xzf "$verifier_archive" -C "$verifier_root"
+          install -m 755 \
+            "$verifier_root/minisign-linux/x86_64/minisign" \
+            "$verifier_root/minisign"
+          echo "$verifier_root" >>"$GITHUB_PATH"
 
       - name: Verify the tag and create or resume the immutable GitHub Release
         env:
@@ -979,28 +1004,25 @@ jobs:
           fi
 
           release_is_draft="$(jq -r '.draft | tostring' "$release_json")"
-          for local_asset in release/*; do
-            asset_name="$(basename "$local_asset")"
-            asset_id="$(jq -r --arg name "$asset_name" \
-              '.assets[] | select(.name == $name) | .id' "$release_json")"
-            if [[ -n "$asset_id" ]]; then
-              remote_asset="$RUNNER_TEMP/zde-existing-$asset_id"
-              gh api \
-                -H "Accept: application/octet-stream" \
-                "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
-                >"$remote_asset"
-              if ! cmp --silent "$local_asset" "$remote_asset"; then
-                echo "::error::Existing release asset bytes do not match: $asset_name"
+          if [[ "$release_is_draft" == "true" ]]; then
+            for local_asset in release/*; do
+              asset_name="$(basename "$local_asset")"
+              asset_count="$(jq -r --arg name "$asset_name" \
+                '[.assets[] | select(.name == $name)] | length' \
+                "$release_json")"
+              if [[ "$asset_count" -gt 1 ]]; then
+                echo "::error::Draft release contains duplicate asset names: $asset_name"
                 exit 1
               fi
-            elif [[ "$release_is_draft" == "true" ]]; then
-              gh release upload "$RELEASE_TAG" "$local_asset" \
-                --repo "$GITHUB_REPOSITORY"
-            else
-              echo "::error::Published release is missing immutable asset: $asset_name"
-              exit 1
-            fi
-          done
+              if [[ "$asset_count" -eq 0 ]]; then
+                gh release upload "$RELEASE_TAG" "$local_asset" \
+                  --repo "$GITHUB_REPOSITORY"
+              fi
+            done
+          elif ! jq -e '.immutable == true' "$release_json" >/dev/null; then
+            echo "::error::Published release must already be immutable before canonical recovery."
+            exit 1
+          fi
 
           refresh_release
           jq -r '.assets[].name' "$release_json" \
@@ -1009,19 +1031,110 @@ jobs:
             "$RUNNER_TEMP/local-asset-names.txt" \
             "$RUNNER_TEMP/remote-asset-names.txt"
 
+          asset_size_limit() {
+            case "$1" in
+              checksums.txt|latest.json|release-metadata.json|*.sig)
+                echo 1048576
+                ;;
+              *.app.tar.gz|*.dmg)
+                echo 536870912
+                ;;
+              *)
+                echo "::error::Unknown release asset class: $1" >&2
+                return 1
+                ;;
+            esac
+          }
+
+          total_api_bytes=0
           for local_asset in release/*; do
             asset_name="$(basename "$local_asset")"
-            asset_id="$(jq -er --arg name "$asset_name" \
-              '.assets[] | select(.name == $name) | .id' "$release_json")"
-            remote_asset="$RUNNER_TEMP/zde-complete-$asset_id"
+            asset_record="$(jq -cer --arg name "$asset_name" \
+              '[.assets[] | select(.name == $name)] \
+              | select(length == 1) | .[0]' "$release_json")"
+            jq -e --arg name "$asset_name" \
+              '.name == $name and .state == "uploaded"' \
+              <<<"$asset_record" >/dev/null
+            jq -er \
+              '.id | select((type == "number") and (. > 0) and (floor == .))' \
+              <<<"$asset_record" >/dev/null
+            asset_size="$(jq -er \
+              '.size | select((type == "number") and (. > 0) and (floor == .))' \
+              <<<"$asset_record")"
+            jq -er \
+              '.digest | select(type == "string" and test("^sha256:[0-9a-f]{64}$"))' \
+              <<<"$asset_record" >/dev/null
+            asset_url="$(jq -er \
+              '.browser_download_url | select(type == "string" and length > 0)' \
+              <<<"$asset_record")"
+            ASSET_URL="$asset_url" \
+              ASSET_NAME="$asset_name" \
+              node - <<'NODE'
+          const assert = require("node:assert/strict");
+          const url = new URL(process.env.ASSET_URL);
+          assert.equal(url.origin, "https://github.com");
+          assert.equal(url.username, "");
+          assert.equal(url.password, "");
+          assert.equal(url.search, "");
+          assert.equal(url.hash, "");
+          const [owner, repository] = process.env.GITHUB_REPOSITORY.split("/");
+          const segments = url.pathname.slice(1).split("/").map(decodeURIComponent);
+          assert.deepEqual(segments, [
+            owner,
+            repository,
+            "releases",
+            "download",
+            process.env.RELEASE_TAG,
+            process.env.ASSET_NAME,
+          ]);
+          NODE
+            asset_limit="$(asset_size_limit "$asset_name")"
+            if [[ "$asset_size" -gt "$asset_limit" ]]; then
+              echo "::error::Release asset exceeds its size limit: $asset_name"
+              exit 1
+            fi
+            total_api_bytes=$((total_api_bytes + asset_size))
+            if [[ "$total_api_bytes" -gt 1073741824 ]]; then
+              echo "::error::Release assets exceed the total size limit."
+              exit 1
+            fi
+          done
+
+          authenticated_dir="$RUNNER_TEMP/zde-authenticated-assets"
+          mkdir -p "$authenticated_dir"
+          for local_asset in release/*; do
+            asset_name="$(basename "$local_asset")"
+            asset_record="$(jq -cer --arg name "$asset_name" \
+              '[.assets[] | select(.name == $name)] \
+              | select(length == 1) | .[0]' "$release_json")"
+            asset_id="$(jq -er \
+              '.id | select((type == "number") and (. > 0) and (floor == .))' \
+              <<<"$asset_record")"
+            asset_size="$(jq -er '.size' <<<"$asset_record")"
+            api_digest="$(jq -er '.digest' <<<"$asset_record")"
+            authenticated_asset="$authenticated_dir/$asset_name"
             gh api \
               -H "Accept: application/octet-stream" \
               "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
-              >"$remote_asset"
-            cmp --silent "$local_asset" "$remote_asset"
+              >"$authenticated_asset"
+            actual_size="$(wc -c <"$authenticated_asset" | tr -d '[:space:]')"
+            if [[ "$actual_size" != "$asset_size" ]]; then
+              echo "::error::Authenticated release asset size mismatch: $asset_name"
+              exit 1
+            fi
+            actual_digest="$(sha256sum "$authenticated_asset" | cut -d ' ' -f 1)"
+            if [[ "$api_digest" != "sha256:$actual_digest" ]]; then
+              echo "::error::Authenticated release asset digest mismatch: $asset_name"
+              exit 1
+            fi
+            if [[ "$release_is_draft" == "true" ]] \
+              && ! cmp --silent "$local_asset" "$authenticated_asset"; then
+              echo "::error::Existing draft release asset bytes do not match: $asset_name"
+              exit 1
+            fi
           done
 
-          if [[ "$(jq -r '.draft | tostring' "$release_json")" == "true" ]]; then
+          if [[ "$release_is_draft" == "true" ]]; then
             gh release edit "$RELEASE_TAG" \
               --repo "$GITHUB_REPOSITORY" \
               --draft=false
@@ -1036,39 +1149,126 @@ jobs:
             "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
           test "$(git -C release-repository rev-parse "refs/tags/${RELEASE_TAG}^{commit}")" = "$REQUEST_COMMIT"
 
-      - name: Download every public asset over HTTPS and compare bytes
+      - name: Download and verify canonical public release assets
         shell: bash
         run: |
           set -euo pipefail
-          verified_dir="$RUNNER_TEMP/zde-public-assets"
-          mkdir -p "$verified_dir"
-          encoded_tag="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$RELEASE_TAG")"
-          for local_asset in release/*; do
-            asset_name="$(basename "$local_asset")"
-            encoded_asset="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$asset_name")"
-            public_url="https://github.com/$GITHUB_REPOSITORY/releases/download/$encoded_tag/$encoded_asset"
-            curl --fail --location --silent --show-error \
-              --retry 8 --retry-all-errors \
-              --proto '=https' --tlsv1.2 \
-              "$public_url" \
-              --output "$verified_dir/$asset_name"
-            cmp --silent "$local_asset" "$verified_dir/$asset_name"
+          authenticated_dir="$RUNNER_TEMP/zde-authenticated-assets"
+          canonical_dir="$RUNNER_TEMP/zde-public-assets"
+          release_json="$RUNNER_TEMP/zde-release.json"
+          mkdir -p "$canonical_dir"
+
+          asset_size_limit() {
+            case "$1" in
+              checksums.txt|latest.json|release-metadata.json|*.sig)
+                echo 1048576
+                ;;
+              *.app.tar.gz|*.dmg)
+                echo 536870912
+                ;;
+              *)
+                echo "::error::Unknown canonical release asset class: $1" >&2
+                return 1
+                ;;
+            esac
+          }
+
+          total_public_bytes=0
+          for authenticated_asset in "$authenticated_dir"/*; do
+            asset_name="$(basename "$authenticated_asset")"
+            asset_record="$(jq -cer --arg name "$asset_name" \
+              '[.assets[] | select(.name == $name)] \
+              | select(length == 1) | .[0]' "$release_json")"
+            asset_size="$(jq -er \
+              '.size | select((type == "number") and (. > 0) and (floor == .))' \
+              <<<"$asset_record")"
+            jq -er \
+              '.browser_download_url \
+              | select(type == "string" and length > 0)' \
+              <<<"$asset_record" >/dev/null
+            asset_limit="$(asset_size_limit "$asset_name")"
+            if [[ "$asset_size" -gt "$asset_limit" ]]; then
+              echo "::error::Public release asset exceeds its size limit: $asset_name"
+              exit 1
+            fi
+            total_public_bytes=$((total_public_bytes + asset_size))
+            if [[ "$total_public_bytes" -gt 1073741824 ]]; then
+              echo "::error::Public release assets exceed the total size limit."
+              exit 1
+            fi
           done
 
-          archive_url="$(node -e 'const fs=require("node:fs"); const m=JSON.parse(fs.readFileSync("release/latest.json","utf8")); process.stdout.write(m.platforms["darwin-aarch64"].url)')"
-          archive_name="$(node -e 'const url=new URL(process.argv[1]); process.stdout.write(decodeURIComponent(url.pathname.split("/").pop()))' "$archive_url")"
-          encoded_archive="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$archive_name")"
-          expected_url="https://github.com/$GITHUB_REPOSITORY/releases/download/$encoded_tag/$encoded_archive"
-          if [[ "$archive_url" != "$expected_url" ]]; then
-            echo "::error::Updater manifest does not use the immutable release URL."
-            exit 1
-          fi
-          curl --fail --location --silent --show-error \
-            --retry 8 --retry-all-errors \
-            --proto '=https' --tlsv1.2 \
-            "$archive_url" \
-            --output "$RUNNER_TEMP/zde-manifest-archive"
-          cmp --silent "release/$archive_name" "$RUNNER_TEMP/zde-manifest-archive"
+          for authenticated_asset in "$authenticated_dir"/*; do
+            asset_name="$(basename "$authenticated_asset")"
+            asset_record="$(jq -cer --arg name "$asset_name" \
+              '[.assets[] | select(.name == $name)] \
+              | select(length == 1) | .[0]' "$release_json")"
+            asset_size="$(jq -er '.size' <<<"$asset_record")"
+            public_url="$(jq -er '.browser_download_url' <<<"$asset_record")"
+            public_asset="$canonical_dir/$asset_name"
+            curl --fail --location --silent --show-error \
+              --retry 8 --retry-all-errors \
+              --connect-timeout 30 --max-time 900 \
+              --max-filesize "$asset_size" --remove-on-error \
+              --proto '=https' --proto-redir '=https' --tlsv1.2 \
+              "$public_url" \
+              --output "$public_asset"
+            actual_size="$(wc -c <"$public_asset" | tr -d '[:space:]')"
+            if [[ "$actual_size" != "$asset_size" ]]; then
+              echo "::error::Public release asset size mismatch: $asset_name"
+              exit 1
+            fi
+            cmp --silent "$authenticated_asset" "$public_asset"
+          done
+
+          node release-repository/scripts/verify-release-payload.mjs \
+            "release-repository/$REQUEST_PATH" \
+            "$canonical_dir" \
+            "$GITHUB_REPOSITORY" \
+            "$PWD/release"
+
+          archive="$(find "$canonical_dir" -maxdepth 1 -type f \
+            -name '*.app.tar.gz' -print)"
+          signature="${archive}.sig"
+          public_key="$RUNNER_TEMP/zde-request-updater.pubkey"
+          PUBLIC_KEY="$public_key" \
+            ARCHIVE_SIGNATURE="$signature" \
+            node - <<'NODE'
+          const fs = require("node:fs");
+          const publicKey = fs.readFileSync(process.env.PUBLIC_KEY, "utf8").trim();
+          const signature = fs.readFileSync(process.env.ARCHIVE_SIGNATURE, "utf8").trim();
+          fs.writeFileSync(process.env.RUNNER_TEMP + "/zde-canonical.pub", Buffer.from(publicKey, "base64"));
+          fs.writeFileSync(process.env.RUNNER_TEMP + "/zde-canonical.minisig", Buffer.from(signature, "base64"));
+          NODE
+          minisign -Vm "$archive" \
+            -p "$RUNNER_TEMP/zde-canonical.pub" \
+            -x "$RUNNER_TEMP/zde-canonical.minisig"
+
+          ARCHIVE="$archive" \
+            ARCHIVE_OUTPUT="$RUNNER_TEMP/zde-canonical-app" \
+            node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          import { extractSourceApplication } from "./release-repository/scripts/package-macos.mjs";
+
+          const result = await extractSourceApplication({
+            archivePath: process.env.ARCHIVE,
+            outputDirectory: process.env.ARCHIVE_OUTPUT,
+            maxArchiveBytes: 536_870_912,
+            maxEntryCount: 16_384,
+            maxFileBytes: 536_870_912,
+            maxUncompressedBytes: 1_073_741_824,
+          });
+          assert.ok(result.entryCount > 1, "canonical archive must contain application entries");
+          assert.ok(result.uncompressedBytes > 0, "canonical archive must contain application bytes");
+          NODE
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: zde-v2-canonical-release
+          path: ${{ runner.temp }}/zde-public-assets/*
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
 
   promote-feed:
     name: Promote the verified v2 feed on a fresh runner
@@ -1109,10 +1309,10 @@ jobs:
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: zde-v2-macos
+          name: zde-v2-canonical-release
           path: release
 
-      - name: Revalidate the immutable request, tag, and signed feed inputs
+      - name: Revalidate the immutable request, tag, and canonical signed feed inputs
         shell: bash
         run: |
           set -euo pipefail
@@ -1135,30 +1335,10 @@ jobs:
             cd release
             sha256sum -c checksums.txt
           )
-          RELEASE_DIRECTORY="$PWD/release" node --input-type=module <<'NODE'
-          import assert from "node:assert/strict";
-          import { readFile } from "node:fs/promises";
-
-          const directory = process.env.RELEASE_DIRECTORY;
-          const manifest = JSON.parse(
-            await readFile(directory + "/latest.json", "utf8"),
-          );
-          const metadata = JSON.parse(
-            await readFile(directory + "/release-metadata.json", "utf8"),
-          );
-          assert.equal(manifest.version, process.env.VERSION);
-          assert.equal(metadata.version, process.env.VERSION);
-          assert.equal(metadata.channel, process.env.CHANNEL);
-          assert.equal(metadata.source_sha, process.env.SOURCE_SHA);
-          const expectedPrefix =
-            "https://github.com/Epoch-ML/zde-releases/releases/download/" +
-            encodeURIComponent(process.env.RELEASE_TAG) +
-            "/";
-          assert.ok(
-            manifest.platforms["darwin-aarch64"].url.startsWith(expectedPrefix),
-            "feed input must use the immutable release tag",
-          );
-          NODE
+          node release-repository/scripts/verify-release-payload.mjs \
+            "release-repository/$REQUEST_PATH" \
+            "$PWD/release" \
+            "$GITHUB_REPOSITORY"
           git -C release-repository fetch --force --no-tags origin \
             "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
           tag_target="$(git -C release-repository rev-parse \
@@ -1296,7 +1476,7 @@ jobs:
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: zde-v2-macos
+          name: zde-v2-canonical-release
           path: release
 
       - name: Verify the published channel manifest over HTTPS
