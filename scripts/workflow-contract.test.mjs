@@ -437,6 +437,62 @@ describe("ZDE release workflow contract", () => {
     }
   });
 
+  it("executes every single-quoted jq program in the workflow", async () => {
+    const jqInvocations = [...workflow.matchAll(/\bjq\b/g)];
+    const jqPrograms = [...workflow.matchAll(
+      /\bjq\b(?:[^'\\\n]|\\(?:\r?\n|.))*'([^']*)'/g,
+    )].map((match) => match[1]);
+    assert.equal(
+      jqPrograms.length,
+      jqInvocations.length,
+      "every jq invocation must expose one single-quoted program to the audit",
+    );
+
+    const asset = {
+      browser_download_url:
+        "https://github.com/Epoch-ML/zde-releases/releases/download/example/checksums.txt",
+      digest: `sha256:${"a".repeat(64)}`,
+      id: 17,
+      name: "checksums.txt",
+      size: 312,
+      state: "uploaded",
+    };
+    const document = {
+      ...asset,
+      assets: [asset],
+      draft: false,
+      id: 23,
+      immutable: true,
+      ssh_keys: ["ssh-ed25519 example"],
+      status: "Accepted",
+      tag_name: "zde-preview-v0.2.0-preview.3",
+    };
+
+    for (const program of jqPrograms) {
+      const execution = await execFileAsync(
+        "jq",
+        [
+          "-nc",
+          "--arg",
+          "name",
+          asset.name,
+          "--arg",
+          "tag",
+          document.tag_name,
+          "--argjson",
+          "expected_id",
+          String(document.id),
+          "--argjson",
+          "document",
+          JSON.stringify(document),
+          `$document | (${program})`,
+        ],
+      );
+      assert.notEqual(execution.stdout, "", `jq produced no output: ${program}`);
+      assert.equal(execution.stderr, "", `jq wrote to stderr: ${program}`);
+    }
+  });
+
   it("finds draft and published releases by one exact tag match", () => {
     const publishStart = workflow.indexOf("\n  publish:");
     const feedStart = workflow.indexOf("\n  promote-feed:");
