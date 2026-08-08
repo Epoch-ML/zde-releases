@@ -1067,27 +1067,12 @@ jobs:
             asset_url="$(jq -er \
               '.browser_download_url | select(type == "string" and length > 0)' \
               <<<"$asset_record")"
-            ASSET_URL="$asset_url" \
-              ASSET_NAME="$asset_name" \
-              node - <<'NODE'
-          const assert = require("node:assert/strict");
-          const url = new URL(process.env.ASSET_URL);
-          assert.equal(url.origin, "https://github.com");
-          assert.equal(url.username, "");
-          assert.equal(url.password, "");
-          assert.equal(url.search, "");
-          assert.equal(url.hash, "");
-          const [owner, repository] = process.env.GITHUB_REPOSITORY.split("/");
-          const segments = url.pathname.slice(1).split("/").map(decodeURIComponent);
-          assert.deepEqual(segments, [
-            owner,
-            repository,
-            "releases",
-            "download",
-            process.env.RELEASE_TAG,
-            process.env.ASSET_NAME,
-          ]);
-          NODE
+            node release-repository/scripts/validate-release-asset-url.mjs \
+              "$asset_url" \
+              "$asset_name" \
+              "$GITHUB_REPOSITORY" \
+              "$RELEASE_TAG" \
+              "$release_is_draft"
             asset_limit="$(asset_size_limit "$asset_name")"
             if [[ "$asset_size" -gt "$asset_limit" ]]; then
               echo "::error::Release asset exceeds its size limit: $asset_name"

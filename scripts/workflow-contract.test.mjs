@@ -231,7 +231,7 @@ describe("ZDE release workflow contract", () => {
     assert.match(workflow, /Legacy root feeds changed/);
     assert.match(workflow, /encodeURIComponent\(process\.env\.RELEASE_TAG\)/);
     assert.match(workflow, /browser_download_url/);
-    assert.match(workflow, /url\.pathname\.slice\(1\)\.split\("\/"\)\.map\(decodeURIComponent\)/);
+    assert.match(workflow, /scripts\/validate-release-asset-url\.mjs/);
   });
 
   it("keeps queued Pages deployments recoverable before HTTPS verification", () => {
