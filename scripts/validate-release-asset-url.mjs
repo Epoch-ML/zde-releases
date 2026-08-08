@@ -22,20 +22,25 @@ export function validateReleaseAssetUrl({
   assert.equal(url.hash, "");
 
   const segments = url.pathname.slice(1).split("/").map(decodeURIComponent);
-  assert.deepEqual(segments, [
+  assert.equal(segments.length, 6);
+  assert.deepEqual(segments.slice(0, 4), [
     owner,
     repositoryName,
     "releases",
     "download",
-    releaseTag,
-    assetName,
   ]);
+  assert.equal(segments[5], assetName);
+
+  const releaseSegment = segments[4];
+  const isCanonicalTag = releaseSegment === releaseTag;
+  const isGitHubDraftSlug = /^untagged-[0-9a-f]{20}$/.test(releaseSegment);
+  assert.equal(isCanonicalTag || (releaseIsDraft && isGitHubDraftSlug), true);
 
   return {
     owner,
     repository: repositoryName,
-    release: segments[4],
-    asset: segments[5],
+    release: releaseSegment,
+    asset: assetName,
   };
 }
 

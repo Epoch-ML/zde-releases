@@ -328,13 +328,15 @@ describe("ZDE release workflow contract", () => {
     const publishStart = workflow.indexOf("\n  publish:");
     const feedStart = workflow.indexOf("\n  promote-feed:");
     const publishJob = workflow.slice(publishStart, feedStart);
-    const draftValidation = publishJob.indexOf('"$release_is_draft"');
+    const draftValidation = publishJob.indexOf(
+      'validate-release-asset-url.mjs \\\n              "$asset_url" \\\n              "$asset_name" \\\n              "$GITHUB_REPOSITORY" \\\n              "$RELEASE_TAG" \\\n              "$release_is_draft"',
+    );
     const publishRelease = publishJob.indexOf("gh release edit");
     const immutableCheck = publishJob.indexOf(
       "GitHub did not mark the published release immutable",
     );
     const canonicalValidation = publishJob.indexOf(
-      'validate-release-asset-url.mjs \\\n+              "$asset_url" \\\n+              "$asset_name" \\\n+              "$GITHUB_REPOSITORY" \\\n+              "$RELEASE_TAG" \\\n+              "false"',
+      'validate-release-asset-url.mjs \\\n              "$asset_url" \\\n              "$asset_name" \\\n              "$GITHUB_REPOSITORY" \\\n              "$RELEASE_TAG" \\\n              "false"',
     );
 
     assert.ok(draftValidation > 0 && draftValidation < publishRelease);

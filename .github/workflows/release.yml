@@ -1188,14 +1188,20 @@ jobs:
               '[.assets[] | select(.name == $name)] | select(length == 1) | .[0]' \
               "$release_json")"
             asset_size="$(jq -er '.size' <<<"$asset_record")"
-            public_url="$(jq -er '.browser_download_url' <<<"$asset_record")"
+            asset_url="$(jq -er '.browser_download_url' <<<"$asset_record")"
+            node release-repository/scripts/validate-release-asset-url.mjs \
+              "$asset_url" \
+              "$asset_name" \
+              "$GITHUB_REPOSITORY" \
+              "$RELEASE_TAG" \
+              "false"
             public_asset="$canonical_dir/$asset_name"
             curl --fail --location --silent --show-error \
               --retry 8 --retry-all-errors \
               --connect-timeout 30 --max-time 900 \
               --max-filesize "$asset_size" --remove-on-error \
               --proto '=https' --proto-redir '=https' --tlsv1.2 \
-              "$public_url" \
+              "$asset_url" \
               --output "$public_asset"
             actual_size="$(wc -c <"$public_asset" | tr -d '[:space:]')"
             if [[ "$actual_size" != "$asset_size" ]]; then
