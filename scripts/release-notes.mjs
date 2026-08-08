@@ -17,7 +17,11 @@ async function main() {
       "usage: release-notes.mjs OUTPUT_PATH VERSION CHANNEL SOURCE_SHA",
     );
   }
-  await writeFile(outputPath, makeReleaseNotes({ version, channel, sourceSha }));
+  await writeFile(
+    outputPath,
+    makeReleaseNotes({ version, channel, sourceSha }),
+    { flag: "wx" },
+  );
 }
 
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
