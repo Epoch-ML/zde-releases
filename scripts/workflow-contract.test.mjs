@@ -121,6 +121,7 @@ describe("ZDE release workflow contract", () => {
       "ZDE_SOURCE_SHA",
       "ZDE_UPDATE_BASE_URL",
       "ZDE_UPDATE_CHANNEL",
+      "ZDE_VERSION",
       "VITE_ZDE_UPDATER_ENABLED",
     ];
 
