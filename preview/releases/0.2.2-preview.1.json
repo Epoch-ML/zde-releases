@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "product": "ZDE",
+  "version": "0.2.2-preview.1",
+  "channel": "preview",
+  "platform": "darwin-aarch64",
+  "source_sha": "ef7c973cb6dcedf711ce1ac3dcd4cc2a6cf23fc4",
+  "apple_notarized": false,
+  "artifacts": [
+    {
+      "name": "ZDE_0.2.2-preview.1_aarch64.app.tar.gz",
+      "sha256": "a6151e2eb9fe68a2304e5ab5f1eafcde5a646e15baca55af627c3a81de2d09a0"
+    },
+    {
+      "name": "ZDE_0.2.2-preview.1_aarch64.app.tar.gz.sig",
+      "sha256": "0a3d09cb2dce2e74c7817807e7046ff6711dfc7a729db70452f42d6be8e31e34"
+    },
+    {
+      "name": "ZDE_0.2.2-preview.1_aarch64.dmg",
+      "sha256": "2811cd3cefd02eed9d54b736f25b90943272e6c88265a064500c316f0e73d486"
+    }
+  ]
+}
