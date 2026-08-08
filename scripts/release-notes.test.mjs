@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
@@ -28,7 +28,11 @@ describe("ZDE public release notes", () => {
       "ZDE 0.2.2 (stable, Apple Silicon macOS)\n\n" +
         "Built from Epoch-ML/zerg commit 0123456789abcdef0123456789abcdef01234567 " +
         "after source, dependency, Apple platform-signature, updater-signature, " +
-        "and artifact verification.\n",
+        "and artifact verification.\n\n" +
+        "Important upgrade notice: ZDE 0.1.2, 0.2.0, and 0.2.1 desktop " +
+        "installations cannot complete this upgrade in-app. Please download and " +
+        "install this release manually once; automatic in-app updates resume from " +
+        "this release onward.\n",
     );
   });
 
@@ -65,11 +69,50 @@ describe("ZDE public release notes", () => {
       "ZDE 0.2.2-preview.1 (preview, Apple Silicon macOS)\n\n" +
         "Built from Epoch-ML/zerg commit fedcba9876543210fedcba9876543210fedcba98 " +
         "after source, dependency, Apple platform-signature, updater-signature, " +
-        "and artifact verification.\n",
+        "and artifact verification.\n\n" +
+        "Important upgrade notice: ZDE 0.1.2, 0.2.0, and 0.2.1 desktop " +
+        "installations cannot complete this upgrade in-app. Please download and " +
+        "install this release manually once; automatic in-app updates resume from " +
+        "this release onward.\n",
     );
     await assert.rejects(
       execFileAsync(process.execPath, arguments_),
       (error) => error.code === 1 && /EEXIST/u.test(error.stderr),
     );
+  });
+
+  it("rejects every incomplete CLI invocation before writing", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "zde-release-notes-invalid-"));
+    temporaryDirectories.push(directory);
+    const scriptPath = new URL("./release-notes.mjs", import.meta.url).pathname;
+    const completeArguments = [
+      join(directory, "notes.md"),
+      "0.2.2",
+      "stable",
+      "0123456789abcdef0123456789abcdef01234567",
+    ];
+
+    for (let count = 0; count < completeArguments.length; count += 1) {
+      await assert.rejects(
+        execFileAsync(process.execPath, [scriptPath, ...completeArguments.slice(0, count)]),
+        (error) =>
+          error.code === 1 &&
+          /^Error: usage: release-notes\.mjs OUTPUT_PATH VERSION CHANNEL SOURCE_SHA$/mu
+            .test(error.stderr),
+      );
+    }
+    assert.deepEqual(await readdir(directory), []);
+  });
+
+  it("can be imported by a process without a script argument", async () => {
+    const moduleUrl = new URL("./release-notes.mjs", import.meta.url).href;
+    const { stdout, stderr } = await execFileAsync(process.execPath, [
+      "--input-type=module",
+      "--eval",
+      `await import(${JSON.stringify(moduleUrl)})`,
+    ]);
+
+    assert.equal(stdout, "");
+    assert.equal(stderr, "");
   });
 });

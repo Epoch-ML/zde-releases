@@ -7,6 +7,8 @@ export function makeReleaseNotes({ version, channel, sourceSha }) {
     "",
     `Built from Epoch-ML/zerg commit ${sourceSha} after source, dependency, Apple platform-signature, updater-signature, and artifact verification.`,
     "",
+    "Important upgrade notice: ZDE 0.1.2, 0.2.0, and 0.2.1 desktop installations cannot complete this upgrade in-app. Please download and install this release manually once; automatic in-app updates resume from this release onward.",
+    "",
   ].join("\n");
 }
 

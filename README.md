@@ -51,7 +51,10 @@ Updater feeds:
 The legacy root **latest-stable.json** and **latest-canary.json** files are
 preserved byte-for-byte. The old private updater key is unavailable, so
 existing 0.1.2 clients need one manual installation of a v2 release before
-channel updates can continue.
+channel updates can continue. ZDE 0.2.0 and 0.2.1 desktop bundles also require
+one manual installation because their packaged frontend omitted the static
+entry document. Automatic channel updates resume after installing a corrected
+release.
 
 ## Repository configuration
 
