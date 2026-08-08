@@ -1,0 +1,11 @@
+{
+  "version": "0.2.0",
+  "notes": "",
+  "pub_date": "2026-08-06T10:22:39.000Z",
+  "platforms": {
+    "darwin-aarch64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTYjVJK0lVdlB5VGxlcys3VTJIaE41YWxNNWtZU0k3eGNrSWUwQUhJRCtRZ2h0aVhzTitqWk1CWGxxTEJ1MDFtdzM4a0txcDYvTmVYbkZmanN2K08yNitLMVJMbGtwRHdnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2MTgxNDMwCWZpbGU6WkRFXzAuMi4wX2FhcmNoNjQuYXBwLnRhci5negoxUHN1N2RDbVZaZENVcW82MTJwZEdWbklyekxEZVZkcEMzWFZ5QUFFZzE5Zmtpa3ljcEQ3dFQ0MWlmNjcwbDhoa1ZvajduNEdVcjc1MDJiUmdtaXdBUT09Cg==",
+      "url": "https://github.com/Epoch-ML/zde-releases/releases/download/zde-v0.2.0/ZDE_0.2.0_aarch64.app.tar.gz"
+    }
+  }
+}
