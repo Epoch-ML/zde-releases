@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "product": "ZDE",
+  "channel": "stable",
+  "version": "0.2.1",
+  "release_tag": "zde-v0.2.1",
+  "source_repository": "Epoch-ML/zerg",
+  "source_sha": "26a84a326974045e5b66f18b6b52df831a9867b8",
+  "source_ref": "refs/tags/zde-v0.2.1",
+  "requested_at": "2026-08-08T17:22:42.000Z"
+}
