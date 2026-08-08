@@ -121,6 +121,7 @@ describe("ZDE release workflow contract", () => {
       "ZDE_SOURCE_SHA",
       "ZDE_UPDATE_BASE_URL",
       "ZDE_UPDATE_CHANNEL",
+      "ZDE_VERSION",
       "VITE_ZDE_UPDATER_ENABLED",
     ];
 
@@ -156,6 +157,12 @@ describe("ZDE release workflow contract", () => {
     );
     assert.ok(
       applicationBuildStep.includes('VITE_ZDE_UPDATER_ENABLED: "true"'),
+    );
+    assert.ok(
+      applicationBuildStep.includes(
+        "ZDE_VERSION: ${{ needs.validate.outputs.version }}",
+      ),
+      "the Nuxt build must display the validated native release version",
     );
 
     const packageStep = buildJob.slice(

@@ -304,6 +304,7 @@ jobs:
       - name: Build the unsigned app without release signing credentials
         env:
           VITE_ZDE_UPDATER_ENABLED: "true"
+          ZDE_VERSION: ${{ needs.validate.outputs.version }}
         working-directory: source/zde
         run: |
           set -euo pipefail
