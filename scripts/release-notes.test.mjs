@@ -32,6 +32,21 @@ describe("ZDE public release notes", () => {
     );
   });
 
+  it("requires one manual bridge from every pre-fix desktop release", () => {
+    const notes = makeReleaseNotes({
+      version: "0.2.2",
+      channel: "stable",
+      sourceSha: "0123456789abcdef0123456789abcdef01234567",
+    });
+
+    assert.match(notes, /Important upgrade notice:/u);
+    assert.match(notes, /0\.1\.2/u);
+    assert.match(notes, /0\.2\.0/u);
+    assert.match(notes, /0\.2\.1/u);
+    assert.match(notes, /download and install this release manually once/u);
+    assert.match(notes, /automatic in-app updates resume/u);
+  });
+
   it("writes one new notes file and refuses to overwrite it", async () => {
     const directory = await mkdtemp(join(tmpdir(), "zde-release-notes-"));
     temporaryDirectories.push(directory);
