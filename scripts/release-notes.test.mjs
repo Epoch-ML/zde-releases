@@ -32,7 +32,7 @@ describe("ZDE public release notes", () => {
     );
   });
 
-  it("writes the notes file with the workflow's overwrite behavior", async () => {
+  it("writes one new notes file and refuses to overwrite it", async () => {
     const directory = await mkdtemp(join(tmpdir(), "zde-release-notes-"));
     temporaryDirectories.push(directory);
     const outputPath = join(directory, "notes.md");
@@ -52,13 +52,9 @@ describe("ZDE public release notes", () => {
         "after source, dependency, Apple platform-signature, updater-signature, " +
         "and artifact verification.\n",
     );
-    await execFileAsync(process.execPath, arguments_);
-    assert.equal(
-      await readFile(outputPath, "utf8"),
-      "ZDE 0.2.2-preview.1 (preview, Apple Silicon macOS)\n\n" +
-        "Built from Epoch-ML/zerg commit fedcba9876543210fedcba9876543210fedcba98 " +
-        "after source, dependency, Apple platform-signature, updater-signature, " +
-        "and artifact verification.\n",
+    await assert.rejects(
+      execFileAsync(process.execPath, arguments_),
+      (error) => error.code === 1 && /EEXIST/u.test(error.stderr),
     );
   });
 });
