@@ -886,11 +886,11 @@ jobs:
         run: |
           set -euo pipefail
           notes_file="$RUNNER_TEMP/zde-release-notes.md"
-          {
-            echo "ZDE $VERSION ($CHANNEL, Apple Silicon macOS)"
-            echo
-            echo "Built from Epoch-ML/zerg commit $SOURCE_SHA after source, dependency, Apple platform-signature, updater-signature, and artifact verification."
-          } >"$notes_file"
+          node release-repository/scripts/release-notes.mjs \
+            "$notes_file" \
+            "$VERSION" \
+            "$CHANNEL" \
+            "$SOURCE_SHA"
           expected_prerelease=false
           if [[ "$CHANNEL" == "preview" ]]; then
             expected_prerelease=true

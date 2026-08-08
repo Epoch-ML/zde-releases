@@ -234,6 +234,26 @@ describe("ZDE release workflow contract", () => {
     assert.match(workflow, /scripts\/validate-release-asset-url\.mjs/);
   });
 
+  it("publishes the canonical generated release notes", () => {
+    const publishStart = workflow.indexOf("\n  publish:");
+    const feedStart = workflow.indexOf("\n  promote-feed:");
+    const publishJob = workflow.slice(publishStart, feedStart);
+    const generateNotes = publishJob.indexOf(
+      'node release-repository/scripts/release-notes.mjs \\\n' +
+        '            "$notes_file" \\\n' +
+        '            "$VERSION" \\\n' +
+        '            "$CHANNEL" \\\n' +
+        '            "$SOURCE_SHA"',
+    );
+    const createRelease = publishJob.indexOf('gh release create "${create_args[@]}"');
+
+    assert.ok(generateNotes >= 0, "the publish job must generate canonical release notes");
+    assert.ok(generateNotes < createRelease, "notes must be generated before publication");
+    assert.match(publishJob, /--notes-file "\$notes_file"/);
+    assert.match(publishJob, /NOTES_FILE="\$notes_file"/);
+    assert.match(publishJob, /release\.body !== expectedBody/);
+  });
+
   it("keeps queued Pages deployments recoverable before HTTPS verification", () => {
     assert.match(
       workflow,
