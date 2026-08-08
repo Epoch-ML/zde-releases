@@ -53,4 +53,56 @@ describe("release asset URL validation", () => {
       );
     }
   });
+
+  it("accepts GitHub's opaque draft slug only while the release is a draft", () => {
+    const draftUrl = validInput.assetUrl.replace(
+      "zde-v0.2.0",
+      "untagged-dd63942194d4f7a6af82",
+    );
+
+    assert.deepEqual(
+      validateReleaseAssetUrl({
+        ...validInput,
+        assetUrl: draftUrl,
+        releaseIsDraft: true,
+      }),
+      {
+        owner: "Epoch-ML",
+        repository: "zde-releases",
+        release: "untagged-dd63942194d4f7a6af82",
+        asset: "ZDE_0.2.0_aarch64.app.tar.gz",
+      },
+    );
+
+    assert.throws(
+      () =>
+        validateReleaseAssetUrl({
+          ...validInput,
+          assetUrl: draftUrl,
+          releaseIsDraft: false,
+        }),
+      { code: "ERR_ASSERTION" },
+    );
+
+    for (const invalidDraftSlug of [
+      "untagged-",
+      "untagged-deadbeef",
+      "untagged-DD63942194D4F7A6AF82",
+      "untagged-dd63942194d4f7a6af8z",
+      "draft-dd63942194d4f7a6af82",
+    ]) {
+      assert.throws(
+        () =>
+          validateReleaseAssetUrl({
+            ...validInput,
+            assetUrl: validInput.assetUrl.replace(
+              "zde-v0.2.0",
+              invalidDraftSlug,
+            ),
+            releaseIsDraft: true,
+          }),
+        { code: "ERR_ASSERTION" },
+      );
+    }
+  });
 });
