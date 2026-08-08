@@ -1,11 +1,11 @@
 {
-  "version": "0.2.0-preview.3",
+  "version": "0.2.1-preview.1",
   "notes": "",
-  "pub_date": "2026-08-06T10:22:39.000Z",
+  "pub_date": "2026-08-08T17:22:42.000Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRQW9yZVFLckRxOUtLM0lQdDBnWVFzWWFCZDBQT3RnWUVqc0pVLzJGeEZJb0hZS2w1cVo3NlRRTS9EaFhCT2dJRFkwQTM0NWpQQWJKa2FnNTFmNFhzYWdMc1RZSVlVN3dJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2MDE2ODE5CWZpbGU6WkRFXzAuMi4wLXByZXZpZXcuM19hYXJjaDY0LmFwcC50YXIuZ3oKNkNISmhSaG9FQjBPemxtZWQxNFVRdGxHODZaTnFDSDBOWUpBQjIvWCtkYzkxenIxU1hHOWhuOE43WksrbXBuZGJlQ3pZN0ZCYTZHUy9FWHJ6N1JoQ1E9PQo=",
-      "url": "https://github.com/Epoch-ML/zde-releases/releases/download/zde-preview-v0.2.0-preview.3/ZDE_0.2.0-preview.3_aarch64.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRQW9yZVFLckRxOUhIMlF2Ujk0SkVQdTMwN3lXY3ozQ21EZDZaNVVPWXJCeTRiWlU1b3B6QmVCOE5yMysvWDl1bXlMbU1BN2VGYUtlMFRCS25WU2l0alZ3RVhNVUVsM0FBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2MjEwOTA2CWZpbGU6WkRFXzAuMi4xLXByZXZpZXcuMV9hYXJjaDY0LmFwcC50YXIuZ3oKUXFyZUU2aWZCTkY3bndXd3VIUWhUZ2krTHlpZTBHeFFseHdrM3dnbmRULzlmWFNlU3ZPVWltSGlKeitTMkFIWWdld3BCVlRSQkdrbjdoRmtacmZRQXc9PQo=",
+      "url": "https://github.com/Epoch-ML/zde-releases/releases/download/zde-preview-v0.2.1-preview.1/ZDE_0.2.1-preview.1_aarch64.app.tar.gz"
     }
   }
 }
